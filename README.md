@@ -1,7 +1,5 @@
 <h1 align="center">
-   <img src="logo.png" width="20%" height="20%" alt="zlog logo" title="zlog logo">
-  <br><br>
-  zlog
+   <img src="logo.png" width="30%" height="30%" alt="zlog logo" title="zlog logo">
 </h1>
 <div align="center">
 zlog is a structured logging library for Zig. It aims to provide a robust and extensible logging system that can handle the needs of complex applications while maintaining high performance.
