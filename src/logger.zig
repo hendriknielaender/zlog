@@ -1,13 +1,22 @@
 const Level = @import("level.zig").Level;
-const Handler = @import("handler.zig").Handler;
+const KeyValue = @import("kv.zig").KeyValue;
+const LogHandler = @import("handler.zig").LogHandler;
 
 pub const Logger = struct {
-    level: Level,
-    handler: *const Handler,
+    handler: LogHandler,
+    min_level: Level,
 
-    pub fn log(self: *Logger, level: Level, message: []const u8) void {
-        if (level.toInt() >= self.level.toInt()) {
-            self.handler(level, message);
+    pub fn create(handler: LogHandler) Logger {
+        return Logger{ .handler = handler, .min_level = Level.Info };
+    }
+
+    pub fn setLogLevel(self: *Logger, level: Level) void {
+        self.min_level = level;
+    }
+
+    pub fn log(self: *Logger, level: Level, msg: []const u8, kv: ?[]const KeyValue) !void {
+        if (@intFromEnum(level) >= @intFromEnum(self.min_level)) {
+            try self.handler.log(level, msg, kv);
         }
     }
 };

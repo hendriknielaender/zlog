@@ -1,20 +1,17 @@
 const std = @import("std");
-const zlog = @import("logger.zig");
+const Logger = @import("logger.zig").Logger;
 const Level = @import("level.zig").Level;
-const handler = @import("handler.zig");
+const LogHandler = @import("handler.zig").LogHandler;
+const KeyValue = @import("kv.zig").KeyValue;
 
-test "log at Info level" {
-    var logger = zlog.Logger{
-        .level = Level.Info,
-        .handler = &handler.consoleHandler,
-    };
-    logger.log(Level.Info, "This is an info message");
+test "Logging different types" {
+    var handler = LogHandler{};
+    var logger = Logger.create(handler);
+    try logger.log(Level.Info, "This is an info message.", null);
+    var kv = [_]KeyValue{KeyValue{ .key = "key", .value = KeyValue.Value{ .String = "value" } }};
+    try logger.log(Level.Error, "This is an error message.", kv[0..]);
 }
 
-test "log at Error level" {
-    var logger = zlog.Logger{
-        .level = Level.Error,
-        .handler = &handler.consoleHandler,
-    };
-    logger.log(Level.Error, "This is an error message");
+pub fn main() void {
+    _ = @import("std").testing.runTests();
 }
