@@ -17,7 +17,8 @@ pub const LogHandler = struct {
     pub fn log(_: *LogHandler, level: Level, msg: []const u8, kv: ?[]const KeyValue) !void {
         var buffer: [256]u8 = undefined;
         const level_str = levelToString(level);
-        std.debug.print("{s}: {s}\n", .{ level_str, msg });
+        try std.io.getStdOut().writer().print("{s}: {s}\n", .{ level_str, msg });
+        //std.debug.print("{s}: {s}\n", .{ level_str, msg });
         if (kv) |values| {
             for (values) |entry| {
                 const valueString = switch (entry.value) {
