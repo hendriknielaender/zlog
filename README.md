@@ -1,6 +1,9 @@
-<div align="center">
-   <img src="logo.png" width="30%" height="30%" alt="zlog logo" title="zlog logo">
-</div>
+# zlog is a structured logging library for Zig.
+[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/LICENSE)
+![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/hendriknielaender/zlog)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md)
+<img src="logo.png" alt="zlog logo" align="right" width="20%"/>
+
 zlog is a structured logging library for Zig. It aims to provide a robust and extensible logging system that can handle the needs of complex applications while maintaining high performance.
 
 ## Features
@@ -25,14 +28,15 @@ const zlog = @import("zlog");
 const std = @import("std");
 
 pub fn main() !void {
-    var logger = zlog.Logger{
-        .level = zlog.Level.Info,
+    var handler = zlog.LogHandler{};
+    var logger = zlog.Logger(zlog.LogHandler){
+        .outputFormat = OutputFormat.PlainText,
+        .handler = handler,
     };
 
-    logger.info("Hello, World!", .{});
-    logger.error("Something went wrong!", .{
-        .error = "NullPointerException",
-    });
+    try logger.info("Hello, World!", null);
+    var kv_pair = kv.kv("error", "NullPointerException");
+    try logger.err("Something went wrong!", &[_]kv.KeyValue{kv_pair});
 }
 ```
 
@@ -46,3 +50,14 @@ var logger = zlog.Logger{
 };
 ```
 
+## Contributing
+
+The main purpose of this repository is to continue to evolve zlog, making it faster and more efficient. We are grateful to the community for contributing bugfixes and improvements. Read below to learn how you can take part in improving zBench.
+
+### Contributing Guide
+
+Read our [contributing guide](CONTRIBUTING.md) to learn about our development process, how to propose bugfixes and improvements, and how to build and test your changes to zlog.
+
+### License
+
+zlog is [MIT licensed](./LICENSE).
