@@ -1,53 +1,48 @@
-# zlog is a structured logging library for Zig.
+# zlog - High-Performance Logging in Zig
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/LICENSE)
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/hendriknielaender/zlog)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md)
 <img src="logo.png" alt="zlog logo" align="right" width="20%"/>
 
-zlog is a structured logging library for Zig. It aims to provide a robust and extensible logging system that can handle the needs of complex applications while maintaining high performance.
+zlog is a high-performance, extensible logging library for Zig, designed to offer both simplicity and power in logging for system-level applications. Inspired by the best features of modern loggers and tailored for the Zig ecosystem, `zlog` brings structured, efficient, and flexible logging to your development toolkit.
 
-## Features
+## Key Features
 
-- **Structured Logging**: Log messages are structured as key-value pairs, making it easy to filter and analyze logs.
-- **Contextual Logging**: Attach contextual information to log entries, aiding in debugging and analysis.
-- **Extensible Output Formats**: Supports multiple output formats like JSON, XML, and YAML, with the ability to define custom formats.
-- **Hierarchical Loggers**: Create loggers in a hierarchy to control logging behavior at different levels of an application.
-- **Log Levels**: Define log levels to control the verbosity of logging output.
-- **Modular Design**: Separate components for log processing, formatting, and output, allowing for custom extensions.
-- **Asynchronous Logging**: Log entries are processed asynchronously for better performance.
-- **Back Pressure Handling**: Ensures the system remains responsive under heavy logging load.
+- **High Performance**: Minimizes overhead, ensuring logging doesn't slow down your application.
+- **Asynchronous Logging**: Non-blocking logging to maintain application performance.
+- **Structured Logging**: Supports JSON and other structured formats for clear, queryable logs.
+- **Customizable Log Levels**: Tailor log levels to fit your application's needs.
+- **Redaction Capabilities**: Securely redact sensitive information from your logs.
+- **Extensible Architecture**: Plug in additional handlers for specialized logging (e.g., file, network).
+- **Cross-Platform Compatibility**: Consistent functionality across different platforms.
+- **Intuitive API**: A simple, clear API that aligns with Zig's philosophy.
 
-## Installation
+## Getting Started
 
-..
+### Installation
 
-## Usage
-Here is a basic usage example of zlog:
 ```zig
 const zlog = @import("zlog");
-const std = @import("std");
 
-pub fn main() !void {
-    var handler = zlog.LogHandler{};
-    var logger = zlog.Logger(zlog.LogHandler){
-        .outputFormat = OutputFormat.PlainText,
-        .handler = handler,
-    };
-
-    try logger.info("Hello, World!", null);
-    var kv_pair = kv.kv("error", "NullPointerException");
-    try logger.err("Something went wrong!", &[_]kv.KeyValue{kv_pair});
-}
+// Set up your logger
+var logger = zlog.Logger.init(allocator, zlog.Level.Info, zlog.OutputFormat.JSON, handler);
 ```
 
-## Configuration
-Customize your logger by setting various configuration options:
+
+### Basic Usage
+Here is a basic usage example of zlog:
 ```zig
-var logger = zlog.Logger{
-    .level = zlog.Level.Debug,
-    .outputFormat = zlog.OutputFormat.JSON,
-    .output = std.io.getStdOut().writer(),
-};
+// Simple logging
+logger.log(zlog.Level.Info, "This is an info log message");
+
+// Asynchronous logging
+logger.asyncLog(zlog.Level.Error, "This is an error log message");
+```
+
+### Structured Logging
+```zig
+// Log with structured data
+logger.logWithKv(zlog.Level.Debug, "Debug message", .{ .{"key", "value"} });
 ```
 
 ## Contributing
