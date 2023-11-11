@@ -33,16 +33,16 @@ var logger = zlog.Logger.init(allocator, zlog.Level.Info, zlog.OutputFormat.JSON
 Here is a basic usage example of zlog:
 ```zig
 // Simple logging
-logger.log(zlog.Level.Info, "This is an info log message");
+logger.log("This is an info log message");
 
 // Asynchronous logging
-logger.asyncLog(zlog.Level.Error, "This is an error log message");
+logger.asyncLog("This is an error log message");
 ```
 
 ### Structured Logging
 ```zig
 // Log with structured data
-logger.logWithKv(zlog.Level.Debug, "Debug message", .{ .{"key", "value"} });
+logger.debug("Debug message", .{ .{"key", "value"} });
 ```
 
 ## Contributing

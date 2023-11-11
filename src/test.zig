@@ -6,17 +6,39 @@ const LogHandler = @import("handler.zig").LogHandler;
 const kv = @import("kv.zig");
 const OutputFormat = @import("logger.zig").OutputFormat;
 
-test "Logging different types" {
-    var handler = LogHandler{};
-    var logger = Logger(LogHandler){
-        .level = Level.Info,
-        .outputFormat = OutputFormat.PlainText,
-        .handler = handler,
-    };
+var globalAllocator = std.heap.page_allocator;
 
-    try logger.info("This is an info message.", null);
-    var kv_pair = kv.kv("key", "value");
-    try logger.err("This is an error message.", &[_]kv.KeyValue{kv_pair});
+fn setupLogger(comptime HandlerType: type, logLevel: Level, format: OutputFormat, handler: HandlerType) !Logger(HandlerType) {
+    return Logger(HandlerType).init(&globalAllocator, logLevel, format, handler);
+}
+
+test "Benchmark different log levels" {
+    var handler = LogHandler{};
+    var logger = try setupLogger(LogHandler, Level.Info, OutputFormat.PlainText, handler);
+
+    const start = std.time.milliTimestamp();
+    try logger.log("This is an info log message", null);
+    const end = std.time.milliTimestamp();
+
+    std.debug.print("Info Level Logging took {} ms\n", .{end - start});
+}
+
+test "Benchmark Synchronous vs Asynchronous Logging" {
+    var handler = LogHandler{};
+    var logger = try setupLogger(LogHandler, Level.Error, OutputFormat.PlainText, handler);
+
+    // Synchronous Logging
+    const startSync = std.time.milliTimestamp();
+    try logger.log("Synchronous log message", null);
+    const endSync = std.time.milliTimestamp();
+
+    // Asynchronous Logging
+    const startAsync = std.time.milliTimestamp();
+    //logger.asyncLog("Asynchronous log message");
+    const endAsync = std.time.milliTimestamp();
+
+    std.debug.print("Synchronous Logging took {} ms\n", .{endSync - startSync});
+    std.debug.print("Not Implemented - Asynchronous Logging took {} ms\n", .{endAsync - startAsync});
 }
 
 pub fn main() !void {}
