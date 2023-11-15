@@ -21,6 +21,74 @@ zlog is a high-performance, extensible logging library for Zig, designed to offe
 
 ### Installation
 
+1. Declare zlog as a dependency in `build.zig.zon`:
+
+    ```diff
+    .{
+        .name = "my-project",
+        .version = "1.0.0",
+        .paths = .{""},
+        .dependencies = .{
+    +       .json = .{
+    +           .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
+    +       },
+        },
+    }
+    ```
+
+2. Add it to your `build.zig`:
+
+    ```diff
+    const std = @import("std");
+
+    pub fn build(b: *std.Build) void {
+        const target = b.standardTargetOptions(.{});
+        const optimize = b.standardOptimizeOption(.{});
+
+    +   const opts = .{ .target = target, .optimize = optimize };
+    +   const zlog_module = b.dependency("zlog", opts).module("zlog");
+
+        const exe = b.addExecutable(.{
+            .name = "test",
+            .root_source_file = .{ .path = "src/main.zig" },
+            .target = target,
+            .optimize = optimize,
+        });
+    +   exe.addModule("zlog", zlog_module);
+        exe.install();
+
+        ...
+    }
+    ```
+
+3. Get zlog package hash:
+
+    ```
+    $ zig build
+    my-project/build.zig.zon:6:20: error: url field is missing corresponding hash field
+            .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
+                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    note: expected .hash = "<HASH>",
+    ```
+
+4. Update `build.zig.zon` package hash value:
+
+    ```diff
+    .{
+        .name = "my-project",
+        .version = "1.0.0",
+        .paths = .{""},
+        .dependencies = .{
+            .json = .{
+                .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
+    +           .hash = "<HASH>",
+            },
+        },
+    }
+    ```
+
+### Basic Usage
+
 ```zig
 const zlog = @import("zlog");
 
@@ -28,8 +96,6 @@ const zlog = @import("zlog");
 var logger = zlog.Logger.init(allocator, zlog.Level.Info, zlog.OutputFormat.JSON, handler);
 ```
 
-
-### Basic Usage
 Here is a basic usage example of zlog:
 ```zig
 // Simple logging
