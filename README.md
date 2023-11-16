@@ -29,7 +29,7 @@ zlog is a high-performance, extensible logging library for Zig, designed to offe
         .version = "1.0.0",
         .paths = .{""},
         .dependencies = .{
-    +       .json = .{
+    +       .zlog = .{
     +           .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
     +       },
         },
@@ -79,7 +79,7 @@ zlog is a high-performance, extensible logging library for Zig, designed to offe
         .version = "1.0.0",
         .paths = .{""},
         .dependencies = .{
-            .json = .{
+            .zlog = .{
                 .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
     +           .hash = "<HASH>",
             },
