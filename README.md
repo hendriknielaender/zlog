@@ -108,7 +108,11 @@ logger.asyncLog("This is an error log message");
 ### Structured Logging
 ```zig
 // Log with structured data
-logger.debug("Debug message", .{ .{"key", "value"} });
+logger.info("Test message", &[_]kv.KeyValue{
+    kv.KeyValue{ .key = "key1", .value = kv.Value{ .String = "value1" } },
+    kv.KeyValue{ .key = "key2", .value = kv.Value{ .Int = 42 } },
+    kv.KeyValue{ .key = "key3", .value = kv.Value{ .Float = 3.14 } },
+});
 ```
 
 ## Contributing
