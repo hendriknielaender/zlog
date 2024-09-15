@@ -1,3 +1,6 @@
+> [!WARNING]  
+> Still work in progress.
+
 # zlog - High-Performance Logging in Zig
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/LICENSE)
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/hendriknielaender/zlog)
