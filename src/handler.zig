@@ -1,6 +1,7 @@
 const std = @import("std");
 const Level = @import("level.zig").Level;
 const KeyValue = @import("kv.zig").KeyValue;
+const builtin = @import("builtin");
 
 pub const LogHandler = struct {
     pub fn levelToString(level: Level) []const u8 {
@@ -17,7 +18,9 @@ pub const LogHandler = struct {
     pub fn log(_: *LogHandler, level: Level, msg: []const u8, kv: ?[]const KeyValue) !void {
         var buffer: [256]u8 = undefined;
         const level_str = levelToString(level);
-        try std.io.getStdOut().writer().print("{s}: {s}\n", .{ level_str, msg });
+        if (!builtin.is_test) {
+            try std.io.getStdOut().writer().print("{s}: {s}\n", .{ level_str, msg });
+        }
         //std.debug.print("{s}: {s}\n", .{ level_str, msg });
         if (kv) |values| {
             for (values) |entry| {

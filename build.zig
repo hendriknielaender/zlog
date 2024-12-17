@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
         .name = "zlog",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/test.zig" },
+        .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -32,9 +32,9 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const main_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/test.zig" },
-        .target = target,
-        .optimize = optimize,
+        .root_source_file = b.path("src/test.zig"),
+        .target = b.host,
+        .optimize = .Debug,
     });
 
     const run_main_tests = b.addRunArtifact(main_tests);
@@ -44,4 +44,8 @@ pub fn build(b: *std.Build) void {
     // This will evaluate the `test` step rather than the default, which is "install".
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_main_tests.step);
+
+    _ = b.addModule("zlog", .{
+        .root_source_file = b.path("src/zlog.zig"),
+    });
 }

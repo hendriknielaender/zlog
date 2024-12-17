@@ -60,7 +60,7 @@ pub fn serializeLogMessage(log: LogMessage) ![]u8 {
 }
 
 test "JSON Serialization Test - Level and Message" {
-    var logMsg = LogMessage{
+    const logMsg = LogMessage{
         .level = Level.Info,
         .msg = "Test message",
         .kv = &[_]kv.KeyValue{
