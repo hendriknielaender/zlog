@@ -74,7 +74,7 @@ pub fn Logger(comptime HandlerType: type) type {
             //std.debug.print("Logger: Logging with Logger instance at address {}\n", .{@intFromPtr(self)}); // Updated line
 
             if (self.outputFormat == OutputFormat.JSON) {
-                var logMsg = LogRecord{ .level = self.level, .msg = msg, .kv = kv };
+                const logMsg = LogRecord{ .level = self.level, .msg = msg, .kv = kv };
                 const serializedMsg = json.serializeLogMessage(logMsg) catch |JsonErr| {
                     std.debug.print("Error serializing log message: {}\n", .{JsonErr});
                     return error.HandlerFailure;
