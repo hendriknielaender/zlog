@@ -4,27 +4,15 @@ const Level = @import("level.zig").Level;
 const kv = @import("kv.zig");
 
 fn appendFormattedInt(buffer: *std.ArrayList(u8), value: i64) !void {
-    var tmpBuf: [20]u8 = undefined; // Buffer for integer formatting
-    const formatted = try std.fmt.bufPrint(&tmpBuf, "{}", .{value});
+    var tmp_buf: [20]u8 = undefined; // Buffer for integer formatting
+    const formatted = try std.fmt.bufPrint(&tmp_buf, "{}", .{value});
     try buffer.appendSlice(formatted);
 }
 
 fn appendFormattedFloat(buffer: *std.ArrayList(u8), value: f64) !void {
-    var tmpBuf: [32]u8 = undefined; // Buffer for float formatting
-    const formatted = try std.fmt.bufPrint(&tmpBuf, "{d:.2}", .{value});
+    var tmp_buf: [32]u8 = undefined; // Buffer for float formatting
+    const formatted = try std.fmt.bufPrint(&tmp_buf, "{d:.2}", .{value});
     try buffer.appendSlice(formatted);
-}
-
-fn appendLevel(buffer: *std.ArrayList(u8), level: Level) !void {
-    const levelStr = switch (level) {
-        .Info => "Info",
-        .Warn => "Warn",
-        .Error => "Error",
-        .Debug => "Debug",
-        .Trace => "Trace",
-        .Fatal => "Fatal", // Handling the 'Fatal' case
-    };
-    try buffer.appendSlice(levelStr);
 }
 
 pub fn serializeLogMessage(log: LogMessage) ![]u8 {
@@ -32,13 +20,13 @@ pub fn serializeLogMessage(log: LogMessage) ![]u8 {
     defer buffer.deinit();
 
     try buffer.appendSlice("{\"level\": \"");
-    try appendLevel(&buffer, log.level);
+    try buffer.appendSlice(log.level.toString());
     try buffer.appendSlice("\", \"message\": \"");
     try buffer.appendSlice(log.msg);
     try buffer.appendSlice("\"");
 
-    if (log.kv) |kvPairs| {
-        for (kvPairs) |pair| {
+    if (log.kv) |kv_pairs| {
+        for (kv_pairs) |pair| {
             try buffer.appendSlice(", \"");
             try buffer.appendSlice(pair.key);
             try buffer.appendSlice("\": ");
@@ -60,7 +48,7 @@ pub fn serializeLogMessage(log: LogMessage) ![]u8 {
 }
 
 test "JSON Serialization Test - Level and Message" {
-    const logMsg = LogMessage{
+    const log_msg = LogMessage{
         .level = Level.Info,
         .msg = "Test message",
         .kv = &[_]kv.KeyValue{
@@ -71,7 +59,7 @@ test "JSON Serialization Test - Level and Message" {
         },
     };
 
-    const serializedMsg = try serializeLogMessage(logMsg);
+    const serialized_msg = try serializeLogMessage(log_msg);
 
-    try std.testing.expectEqualStrings("{\"level\": \"Info\", \"message\": \"Test message\", \"key1\": \"value1\", \"key2\": 42, \"key3\": 3.14}", serializedMsg);
+    try std.testing.expectEqualStrings("{\"level\": \"Info\", \"message\": \"Test message\", \"key1\": \"value1\", \"key2\": 42, \"key3\": 3.14}", serialized_msg);
 }

@@ -6,13 +6,14 @@ const LogHandler = @import("handler.zig").LogHandler;
 const kv = @import("kv.zig");
 const OutputFormat = @import("logger.zig").OutputFormat;
 
-var globalAllocator = std.heap.page_allocator;
+var global_allocator = std.heap.page_allocator;
 
-fn setupLogger(comptime HandlerType: type, logLevel: Level, format: OutputFormat, handler: *HandlerType) !Logger(HandlerType) {
-    return Logger(HandlerType).init(&globalAllocator, logLevel, format, handler);
+fn setupLogger(comptime HandlerType: type, log_level: Level, format: OutputFormat, handler: *HandlerType) !Logger(HandlerType) {
+    return Logger(HandlerType).init(&global_allocator, log_level, format, handler);
 }
 
 test "Benchmark different log levels" {
+    // do wyp p p
     var handler = LogHandler{};
     var logger = try setupLogger(LogHandler, Level.Info, OutputFormat.PlainText, &handler);
 
@@ -28,25 +29,25 @@ test "Benchmark Synchronous vs Asynchronous Logging" {
     var logger = try setupLogger(LogHandler, Level.Error, OutputFormat.PlainText, &handler);
 
     // Synchronous Logging
-    const startSync = std.time.milliTimestamp();
+    const start_sync = std.time.milliTimestamp();
     logger.info("Synchronous log message", null);
-    const endSync = std.time.milliTimestamp();
+    const end_sync = std.time.milliTimestamp();
 
     // Asynchronous Logging
-    const startAsync = std.time.milliTimestamp();
+    const start_async = std.time.milliTimestamp();
     //logger.asyncLog("Asynchronous log message");
-    const endAsync = std.time.milliTimestamp();
+    const end_async = std.time.milliTimestamp();
 
-    std.debug.print("Synchronous Logging took {} ms\n", .{endSync - startSync});
-    std.debug.print("Not Implemented - Asynchronous Logging took {} ms\n", .{endAsync - startAsync});
+    std.debug.print("Synchronous Logging took {} ms\n", .{end_sync - start_sync});
+    std.debug.print("Not Implemented - Asynchronous Logging took {} ms\n", .{end_async - start_async});
 }
 
 const MockLogHandler = struct {
-    capturedOutput: std.ArrayList(u8),
+    captured_output: std.ArrayList(u8),
 
     pub fn log(self: *MockLogHandler, _: Level, msg: []const u8, _: ?[]const kv.KeyValue) anyerror!void {
         //std.debug.print("Before appending, capturedOutput length: {}\n", .{self.capturedOutput.items.len});
-        try self.capturedOutput.appendSlice(msg);
+        try self.captured_output.appendSlice(msg);
         //std.debug.print("After appending, capturedOutput length: {}\n", .{self.capturedOutput.items.len});
         //std.debug.print("Captured message: {s}\n", .{msg});
     }
@@ -54,28 +55,28 @@ const MockLogHandler = struct {
 
 test "JSON Logging Test" {
     var allocator = std.heap.page_allocator;
-    var mockHandler = MockLogHandler{ .capturedOutput = std.ArrayList(u8).init(allocator) };
-    defer mockHandler.capturedOutput.deinit();
+    var mock_handler = MockLogHandler{ .captured_output = std.ArrayList(u8).init(allocator) };
+    defer mock_handler.captured_output.deinit();
 
     //std.debug.print("Test: Created MockLogHandler at address {}\n", .{@intFromPtr(&mockHandler)}); // Debug print
 
-    var logger = try Logger(MockLogHandler).init(&allocator, Level.Info, OutputFormat.JSON, &mockHandler);
+    var logger = try Logger(MockLogHandler).init(&allocator, Level.Info, OutputFormat.JSON, &mock_handler);
     //std.debug.print("Test: Created Logger at address {}\n", .{@intFromPtr(&logger)}); // Debug print
 
-    const kvPairs = &[_]kv.KeyValue{
+    const kv_pairs = &.{
         kv.KeyValue{ .key = "key1", .value = kv.Value{ .String = "value1" } },
         kv.KeyValue{ .key = "key2", .value = kv.Value{ .Int = 42 } },
         kv.KeyValue{ .key = "key3", .value = kv.Value{ .Float = 3.14 } },
     };
 
-    logger.info("Test message", kvPairs);
+    logger.info("Test message", kv_pairs);
 
     //std.debug.print("MockLogHandler: capturedOutput length = {}\n", .{mockHandler.capturedOutput.items.len}); // Debug print
-    const loggedJson = mockHandler.capturedOutput.items;
+    const logged_json = mock_handler.captured_output.items;
 
     //std.debug.print("MockLogHandler: loggedJson = {s}\n", .{loggedJson}); // Debug line
 
-    try std.testing.expectEqualStrings("{\"level\": \"Info\", \"message\": \"Test message\", \"key1\": \"value1\", \"key2\": 42, \"key3\": 3.14}", loggedJson);
+    try std.testing.expectEqualStrings("{\"level\": \"Info\", \"message\": \"Test message\", \"key1\": \"value1\", \"key2\": 42, \"key3\": 3.14}", logged_json);
 }
 
 pub fn main() !void {}
