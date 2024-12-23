@@ -15,73 +15,72 @@ pub const LogRecord = struct {
 pub fn Logger(comptime HandlerType: type) type {
     return struct {
         level: Level,
-        outputFormat: OutputFormat,
+        output_format: OutputFormat,
         handler: *HandlerType, // Ensure this is a pointer
 
-        pub fn init(_: *std.mem.Allocator, level: Level, outputFormat: OutputFormat, handler: *HandlerType) ZlogError!Logger(HandlerType) {
-            return Logger(HandlerType){
+        const Self = @This();
+
+        pub fn init(_: *std.mem.Allocator, level: Level, outputFormat: OutputFormat, handler: *HandlerType) ZlogError!Self {
+            return Self{
                 .level = level,
-                .outputFormat = outputFormat,
+                .output_format = outputFormat,
                 .handler = handler, // Store the pointer directly
             };
         }
 
-        pub fn setLevel(self: *Logger(HandlerType), newLevel: Level) ZlogError!void {
-            if (!std.meta.enumsHaveMember(Level, newLevel)) {
-                return error.InvalidLevel;
-            }
-            self.level = newLevel;
+        pub fn setLevel(self: *Self, new_level: Level) ZlogError!void {
+            self.level = new_level;
             return self;
         }
 
-        pub fn info(self: *Logger(HandlerType), msg: []const u8, kv: ?[]const KeyValue) void {
-            self.log(msg, kv) catch |logErr| {
-                std.debug.print("Log error: {}\n", .{logErr});
+        pub fn info(self: *Self, msg: []const u8, kv: ?[]const KeyValue) void {
+            self.log(msg, kv) catch |log_err| {
+                std.debug.print("Log error: {}\n", .{log_err});
                 return;
             };
         }
 
-        pub fn warn(self: *Logger(HandlerType), msg: []const u8, kv: ?[]const KeyValue) void {
-            self.log(msg, kv) catch |logErr| {
-                std.debug.print("Log error: {}\n", .{logErr});
+        pub fn warn(self: *Self, msg: []const u8, kv: ?[]const KeyValue) void {
+            self.log(msg, kv) catch |log_err| {
+                std.debug.print("Log error: {}\n", .{log_err});
                 return;
             };
         }
 
-        pub fn err(self: *Logger(HandlerType), msg: []const u8, kv: ?[]const KeyValue) void {
-            self.log(msg, kv) catch |logErr| {
-                std.debug.print("Log error: {}\n", .{logErr});
+        pub fn err(self: *Self, msg: []const u8, kv: ?[]const KeyValue) void {
+            self.log(msg, kv) catch |log_err| {
+                std.debug.print("Log error: {}\n", .{log_err});
                 return;
             };
         }
 
-        pub fn debug(self: *Logger(HandlerType), msg: []const u8, kv: ?[]const KeyValue) void {
-            self.log(msg, kv) catch |logErr| {
-                std.debug.print("Log error: {}\n", .{logErr});
+        pub fn debug(self: *Self, msg: []const u8, kv: ?[]const KeyValue) void {
+            self.log(msg, kv) catch |log_err| {
+                std.debug.print("Log error: {}\n", .{log_err});
                 return;
             };
         }
 
-        pub fn trace(self: *Logger(HandlerType), msg: []const u8, kv: ?[]const KeyValue) void {
-            self.log(msg, kv) catch |logErr| {
-                std.debug.print("Log error: {}\n", .{logErr});
+        pub fn trace(self: *Self, msg: []const u8, kv: ?[]const KeyValue) void {
+            self.log(msg, kv) catch |log_err| {
+                std.debug.print("Log error: {}\n", .{log_err});
                 return;
             };
         }
 
-        pub fn log(self: *Logger(HandlerType), msg: []const u8, kv: ?[]const KeyValue) anyerror!void {
+        pub fn log(self: *Self, msg: []const u8, kv: ?[]const KeyValue) anyerror!void {
             // Debug print to show the handler's address
             //std.debug.print("Logger: Logging with Logger instance at address {}\n", .{@intFromPtr(self)}); // Updated line
 
-            if (self.outputFormat == OutputFormat.JSON) {
-                const logMsg = LogRecord{ .level = self.level, .msg = msg, .kv = kv };
-                const serializedMsg = json.serializeLogMessage(logMsg) catch |JsonErr| {
-                    std.debug.print("Error serializing log message: {}\n", .{JsonErr});
+            if (self.output_format == OutputFormat.JSON) {
+                const log_msg = LogRecord{ .level = self.level, .msg = msg, .kv = kv };
+                const serialized_msg = json.serializeLogMessage(log_msg) catch |json_err| {
+                    std.debug.print("Error serializing log message: {}\n", .{json_err});
                     return error.HandlerFailure;
                 };
 
                 // Pass the serialized message slice directly
-                try self.handler.log(self.level, serializedMsg, null);
+                try self.handler.log(self.level, serialized_msg, null);
             } else {
                 // Handle non-JSON formats as before
                 if (kv) |keyValues| {

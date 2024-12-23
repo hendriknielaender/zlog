@@ -5,4 +5,8 @@ pub const Level = enum {
     Warn,
     Error,
     Fatal,
+
+    pub fn toString(self: Level) []const u8 {
+        return @tagName(self);
+    }
 };
