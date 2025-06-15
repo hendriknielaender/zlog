@@ -1,65 +1,63 @@
 > [!WARNING]  
 > Still work in progress.
 
-# zlog - High-Performance Logging in Zig
+# zlog - structured logging for zig
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/LICENSE)
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/hendriknielaender/zlog)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md)
 <img src="logo.png" alt="zlog logo" align="right" width="20%"/>
 
-zlog is a safety-critical, high-performance structured logging library for Zig with zero allocations. Built following TigerBeetle engineering principles and NASA's Power of 10 rules for safety-critical code, zlog provides deterministic performance without hidden costs.
+zlog is a structured logging library for Zig.
 
-## Key Features
 
-- **⚡ Zero Allocations**: All formatting happens in stack-allocated buffers - no hidden heap allocations
-- **🎯 Structured Logging**: Type-safe key-value fields with compile-time validation
-- **⚙️ Compile-Time Configuration**: Buffer sizes, field limits, and log levels configured at compile time
-- **🔍 Level Filtering**: Efficient compile-time and runtime log level filtering (12ns)
-- **📋 JSON Output**: First-class JSON formatting with optimized escaping
-- **📦 Zero Dependencies**: Only Zig standard library
+### 🎯 **Tracing**
+Full distributed tracing support with pre-formatted hex strings for maximum performance:
+
+```zig
+const trace_ctx = zlog.TraceContextImpl.init(true);
+logger.infoWithTrace("Request processed", trace_ctx, &.{
+    zlog.field.string("service", "api"),
+    zlog.field.uint("status_code", 200),
+});
+```
+
+Output:
+```json
+{"level":"INFO","msg":"Request processed","trace":"a1b2c3d4e5f67890a1b2c3d4e5f67890","span":"1234567890abcdef","ts":1640995200000,"tid":12345,"service":"api","status_code":200}
+```
 
 ## Getting Started
 
 ### Installation
 
-1. Declare zlog as a dependency in `build.zig.zon`:
+1. Add to `build.zig.zon`:
 
-    ```zig
-    .{
-        .name = "my-project",
-        .version = "1.0.0",
-        .paths = .{""},
-        .dependencies = .{
-            .zlog = .{
-                .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
-                .hash = "<HASH>",
-            },
+```zig
+.{
+    .name = "my-project",
+    .version = "1.0.0",
+    .dependencies = .{
+        .zlog = .{
+            .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
+            .hash = "<HASH>",
         },
-    }
-    ```
+        .libxev = .{
+            .url = "https://github.com/mitchellh/libxev/archive/<COMMIT>.tar.gz", 
+            .hash = "<HASH>",
+        },
+    },
+}
+```
 
-2. Add it to your `build.zig`:
+2. Configure in `build.zig`:
 
-    ```zig
-    const std = @import("std");
+```zig
+const zlog_module = b.dependency("zlog", opts).module("zlog");
+const libxev_module = b.dependency("libxev", opts).module("xev");
 
-    pub fn build(b: *std.Build) void {
-        const target = b.standardTargetOptions(.{});
-        const optimize = b.standardOptimizeOption(.{});
-
-        const opts = .{ .target = target, .optimize = optimize };
-        const zlog_module = b.dependency("zlog", opts).module("zlog");
-
-        const exe = b.addExecutable(.{
-            .name = "app",
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
-        exe.root_module.addImport("zlog", zlog_module);
-        b.installArtifact(exe);
-    }
-    ```
+exe.root_module.addImport("zlog", zlog_module);
+exe.root_module.addImport("xev", libxev_module); // For async logging
+```
 
 ### Basic Usage
 
@@ -68,103 +66,169 @@ const std = @import("std");
 const zlog = @import("zlog");
 
 pub fn main() !void {
-    // Create a logger with default configuration
+    // High-performance sync logger
     var logger = zlog.default();
     
-    // Simple logging
-    logger.info("Application started", &.{});
+    // Simple logging with trace context
+    const trace_ctx = zlog.TraceContextImpl.init(true);
+    logger.infoWithTrace("Service started", trace_ctx, &.{
+        zlog.field.string("version", "1.0.0"),
+        zlog.field.uint("port", 8080),
+    });
     
-    // Structured logging with fields
-    logger.info("User logged in", &.{
-        zlog.field.string("username", "alice"),
+    // Different field types
+    logger.info("User action", &.{
+        zlog.field.string("user", "alice"),
         zlog.field.uint("user_id", 12345),
-        zlog.field.string("ip", "192.168.1.1"),
-    });
-    
-    // Different log levels
-    logger.debug("Debug information", &.{
-        zlog.field.string("module", "auth"),
-    });
-    
-    logger.err("Connection failed", &.{
-        zlog.field.string("host", "api.example.com"),
-        zlog.field.int("port", 443),
-        zlog.field.float("timeout_seconds", 30.0),
+        zlog.field.boolean("success", true),
+        zlog.field.float("duration_ms", 45.7),
     });
 }
 ```
 
-Output:
-```json
-{"level":"Info","message":"Application started"}
-{"level":"Info","message":"User logged in","username":"alice","user_id":12345,"ip":"192.168.1.1"}
-{"level":"Error","message":"Connection failed","host":"api.example.com","port":443,"timeout_seconds":30}
+### Async Logging
+
+For maximum throughput in high-load scenarios:
+
+```zig
+const std = @import("std");
+const zlog = @import("zlog");
+const xev = @import("xev");
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    defer _ = gpa.deinit();
+
+    // Setup event loop
+    var loop = try xev.Loop.init(.{});
+    defer loop.deinit();
+
+    // Create async logger
+    const config = zlog.Config{
+        .async_mode = true,
+        .async_queue_size = 1024,
+        .batch_size = 32,
+        .enable_simd = true,
+    };
+
+    const stdout = std.io.getStdOut().writer();
+    var logger = try zlog.Logger(config).initAsync(stdout.any(), &loop, gpa.allocator());
+    defer logger.deinit();
+
+    const trace_ctx = zlog.TraceContextImpl.init(true);
+    
+    // Log messages per second
+    for (0..1_000_000) |i| {
+        logger.infoWithTrace("High throughput message", trace_ctx, &.{
+            zlog.field.uint("iteration", i),
+            zlog.field.string("service", "api"),
+        });
+        
+        // Process event loop periodically
+        if (i % 1000 == 0) {
+            try loop.run(.no_wait);
+        }
+    }
+    
+    // Final flush
+    try loop.run(.no_wait);
+}
 ```
 
 ### Custom Configuration
 
 ```zig
-// Create a logger with custom configuration
 const Config = zlog.Config{
-    .level = .debug,        // Minimum level to log
-    .max_fields = 64,       // Maximum fields per message
-    .buffer_size = 8192,    // Buffer size for formatting
+    .level = .debug,           // Minimum level to log
+    .max_fields = 64,          // Maximum fields per message  
+    .buffer_size = 8192,       // Buffer size for formatting
+    .async_mode = true,        // Enable async logging
+    .async_queue_size = 2048,  // Async queue size
+    .batch_size = 64,          // Batch size for async writes
+    .enable_simd = true,       // Enable SIMD optimizations
 };
 
 var logger = zlog.Logger(Config).init(writer);
 ```
 
-### Field Types
+## Field Types
 
-zlog supports multiple field types for structured logging:
+All field types are strongly typed and validated at compile time:
 
 ```zig
 // String fields
-zlog.field.string("name", "Alice")
+zlog.field.string("service", "api")
 
-// Integer fields (signed and unsigned)
+// Integer fields
 zlog.field.int("temperature", -10)
-zlog.field.uint("count", 42)
+zlog.field.uint("request_id", 12345)
 
 // Floating point
-zlog.field.float("pi", 3.14159)
+zlog.field.float("duration_ms", 123.45)
 
 // Boolean
-zlog.field.boolean("enabled", true)
+zlog.field.boolean("success", true)
 
 // Null values
-zlog.field.null_value("optional_field")
+zlog.field.null_value("optional_data")
 ```
 
-### Log Levels
-
-Available log levels in order of severity:
+## Log Levels
 
 ```zig
-logger.trace("Detailed trace information", &.{});
-logger.debug("Debug information", &.{});  
-logger.info("Informational message", &.{});
-logger.warn("Warning message", &.{});
-logger.err("Error message", &.{});
-logger.fatal("Fatal error", &.{});
+logger.trace("Detailed trace", &.{});  // Lowest priority
+logger.debug("Debug info", &.{});      
+logger.info("Information", &.{});      // Default level
+logger.warn("Warning", &.{});          
+logger.err("Error occurred", &.{});    
+logger.fatal("Fatal error", &.{});     // Highest priority
 ```
 
+## Performance Benchmarks
+
+Run comprehensive performance analysis:
+
+```bash
+# Run all benchmarks
+zig build benchmarks
+
+# Individual components (if needed)
+zig build test
+```
+
+## Trace Context
+
+zlog provides full W3C Trace Context specification compliance:
+
+```zig
+// Create trace context
+const trace_ctx = zlog.TraceContextImpl.init(true);
+
+// Child spans maintain trace correlation
+const child_ctx = trace_ctx.createChild(true);
+
+// Extract for compatibility with other systems
+const short_id = zlog.extract_short_from_trace_id(trace_ctx.trace_id);
+```
+
+Pre-formatted hex strings eliminate per-log conversion overhead, crucial for ultra-high throughput scenarios.
+
+
+
+## Contributing
+
+We welcome contributions that maintain our safety and performance standards:
+
+1. **Follow TigerStyle** - All code must comply with TigerBeetle guidelines
+2. **Add comprehensive tests** - Both positive and negative test cases
+3. **Include benchmarks** - Performance impact must be measured
+4. **Zero regressions** - Existing functionality must not be degraded
+
+Read our [contributing guide](CONTRIBUTING.md) for detailed development process.
 
 ## Building & Development
 
 ```bash
-# Run tests
-zig build test
-
-# Run benchmarks
-zig build bench
-
-# Run isolated performance analysis
-zig build isolated
-
-# Run memory allocation benchmarks
-zig build memory
-
 # Build library
 zig build
 
@@ -172,16 +236,6 @@ zig build
 zig fmt src/ benchmarks/
 ```
 
-## Contributing
-
-The main purpose of this repository is to continue to evolve zlog, making it faster and more efficient while maintaining the highest safety standards. We are grateful to the community for contributing bugfixes and improvements. 
-
-Read our [contributing guide](CONTRIBUTING.md) to learn about our development process, which includes adherence to TigerStyle guidelines and safety-critical coding standards.
-
 ## License
 
 zlog is [MIT licensed](./LICENSE).
-
----
-
-*Built with ⚡ performance and 🛡️ safety in mind for production Zig applications.*

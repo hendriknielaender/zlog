@@ -11,12 +11,19 @@ pub fn build(b: *std.Build) void {
     });
     const zbench_module = zbench_dep.module("zbench");
 
+    const libxev_dep = b.dependency("libxev", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const libxev_module = libxev_dep.module("xev");
+
     // Module for the main library.
     const zlog_module = b.addModule("zlog", .{
         .root_source_file = b.path("src/zlog.zig"),
         .target = target,
         .optimize = optimize,
     });
+    zlog_module.addImport("xev", libxev_module);
 
     // Static library.
     const lib = b.addStaticLibrary(.{
@@ -25,6 +32,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    lib.root_module.addImport("xev", libxev_module);
     b.installArtifact(lib);
 
     // Unit tests (built into the source file).
@@ -33,40 +41,37 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    unit_tests.root_module.addImport("xev", libxev_module);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
-
-    // Benchmarks.
-    const benchmarks = b.addExecutable(.{
-        .name = "benchmarks",
-        .root_source_file = b.path("benchmarks/main.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-    });
-    benchmarks.root_module.addImport("zbench", zbench_module);
-    benchmarks.root_module.addImport("zlog", zlog_module);
-
-    const run_benchmarks = b.addRunArtifact(benchmarks);
 
     // Test step.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
-    // Comparison benchmarks.
-    const comparison = b.addExecutable(.{
-        .name = "comparison",
-        .root_source_file = b.path("benchmarks/comparison.zig"),
+    // Async performance benchmark.
+    const async_bench = b.addExecutable(.{
+        .name = "async",
+        .root_source_file = b.path("benchmarks/async.zig"),
         .target = target,
         .optimize = .ReleaseFast,
     });
-    comparison.root_module.addImport("zbench", zbench_module);
-    comparison.root_module.addImport("zlog", zlog_module);
+    async_bench.root_module.addImport("zlog", zlog_module);
+    async_bench.root_module.addImport("xev", libxev_module);
 
-    const run_comparison = b.addRunArtifact(comparison);
+    const run_async = b.addRunArtifact(async_bench);
 
-    // Benchmark step.
-    const bench_step = b.step("bench", "Run benchmarks");
-    bench_step.dependOn(&run_benchmarks.step);
+    // Memory allocation benchmark.
+    const memory = b.addExecutable(.{
+        .name = "memory",
+        .root_source_file = b.path("benchmarks/memory.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    memory.root_module.addImport("zbench", zbench_module);
+    memory.root_module.addImport("zlog", zlog_module);
+
+    const run_memory = b.addRunArtifact(memory);
 
     // Isolated performance analysis.
     const isolated = b.addExecutable(.{
@@ -79,27 +84,35 @@ pub fn build(b: *std.Build) void {
 
     const run_isolated = b.addRunArtifact(isolated);
 
-    // Comparison step.
-    const compare_step = b.step("compare", "Run comparison benchmarks");
-    compare_step.dependOn(&run_comparison.step);
-
-    // Memory allocation benchmarks.
-    const memory = b.addExecutable(.{
-        .name = "memory",
-        .root_source_file = b.path("benchmarks/memory.zig"),
+    // Production benchmark.
+    const production = b.addExecutable(.{
+        .name = "production",
+        .root_source_file = b.path("benchmarks/production.zig"),
         .target = target,
         .optimize = .ReleaseFast,
     });
-    memory.root_module.addImport("zbench", zbench_module);
-    memory.root_module.addImport("zlog", zlog_module);
+    production.root_module.addImport("zlog", zlog_module);
+    production.root_module.addImport("xev", libxev_module);
 
-    const run_memory = b.addRunArtifact(memory);
+    const run_production = b.addRunArtifact(production);
 
-    // Isolated step.
-    const isolated_step = b.step("isolated", "Run isolated performance analysis");
-    isolated_step.dependOn(&run_isolated.step);
+    // Comprehensive benchmark.
+    const comprehensive = b.addExecutable(.{
+        .name = "comprehensive",
+        .root_source_file = b.path("benchmarks/comprehensive.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    comprehensive.root_module.addImport("zbench", zbench_module);
+    comprehensive.root_module.addImport("zlog", zlog_module);
 
-    // Memory step.
-    const memory_step = b.step("memory", "Run memory allocation benchmarks");
-    memory_step.dependOn(&run_memory.step);
+    const run_comprehensive = b.addRunArtifact(comprehensive);
+
+    // Consolidated benchmark step.
+    const benchmarks_step = b.step("benchmarks", "Run all performance benchmarks");
+    benchmarks_step.dependOn(&run_async.step);
+    benchmarks_step.dependOn(&run_memory.step);
+    benchmarks_step.dependOn(&run_isolated.step);
+    benchmarks_step.dependOn(&run_production.step);
+    benchmarks_step.dependOn(&run_comprehensive.step);
 }
