@@ -9,23 +9,6 @@
 
 zlog is a structured logging library for Zig.
 
-
-### 🎯 **Tracing**
-Full distributed tracing support with pre-formatted hex strings for maximum performance:
-
-```zig
-const trace_ctx = zlog.TraceContextImpl.init(true);
-logger.infoWithTrace("Request processed", trace_ctx, &.{
-    zlog.field.string("service", "api"),
-    zlog.field.uint("status_code", 200),
-});
-```
-
-Output:
-```json
-{"level":"INFO","msg":"Request processed","trace":"a1b2c3d4e5f67890a1b2c3d4e5f67890","span":"1234567890abcdef","ts":1640995200000,"tid":12345,"service":"api","status_code":200}
-```
-
 ## Getting Started
 
 ### Installation
@@ -196,7 +179,22 @@ zig build benchmarks
 zig build test
 ```
 
-## Trace Context
+## Trace
+
+Full distributed tracing support with pre-formatted hex strings for maximum performance:
+
+```zig
+const trace_ctx = zlog.TraceContextImpl.init(true);
+logger.infoWithTrace("Request processed", trace_ctx, &.{
+    zlog.field.string("service", "api"),
+    zlog.field.uint("status_code", 200),
+});
+```
+
+Output:
+```json
+{"level":"INFO","msg":"Request processed","trace":"a1b2c3d4e5f67890a1b2c3d4e5f67890","span":"1234567890abcdef","ts":1640995200000,"tid":12345,"service":"api","status_code":200}
+```
 
 zlog provides full W3C Trace Context specification compliance:
 
