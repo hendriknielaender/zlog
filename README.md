@@ -7,7 +7,9 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md)
 <img src="logo.png" alt="zlog logo" align="right" width="20%"/>
 
-zlog is a structured logging library for Zig.
+zlog is a high-performance, extensible logging library for Zig, designed to offer both simplicity and power in logging for system-level applications. Inspired by the best features of modern loggers and tailored for the Zig ecosystem, `zlog` brings structured, efficient, and flexible logging to your development toolkit.
+
+---
 
 ## Getting Started
 
