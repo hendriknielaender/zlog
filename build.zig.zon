@@ -1,0 +1,25 @@
+.{
+    .fingerprint = 0x55b82e332fb709da,
+    .name = .zlog,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{
+        .zbench = .{
+            .url = "https://github.com/hendriknielaender/zBench/archive/main.tar.gz",
+            .hash = "zbench-0.10.0-YTdc714iAQDO4lTHMnIljYHPZ5v_sNTsw75vAmO1pyT-",
+        },
+        .@"log.zig" = .{
+            .url = "https://github.com/karlseguin/log.zig/archive/master.tar.gz",
+            .hash = "logz-0.0.0-O9YWXlhHAgD8srw1WqQ2SPde3T674hoD3mGFPCVCWFPS",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "benchmarks",
+        "README.md",
+        "BENCHMARKS.md",
+        "DESIGN.md",
+    },
+}

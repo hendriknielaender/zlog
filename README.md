@@ -7,18 +7,16 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md)
 <img src="logo.png" alt="zlog logo" align="right" width="20%"/>
 
-zlog is a high-performance, extensible logging library for Zig, designed to offer both simplicity and power in logging for system-level applications. Inspired by the best features of modern loggers and tailored for the Zig ecosystem, `zlog` brings structured, efficient, and flexible logging to your development toolkit.
+zlog is a safety-critical, high-performance structured logging library for Zig with zero allocations. Built following TigerBeetle engineering principles and NASA's Power of 10 rules for safety-critical code, zlog provides deterministic performance without hidden costs.
 
 ## Key Features
 
-- **High Performance**: Minimizes overhead, ensuring logging doesn't slow down your application.
-- **Asynchronous Logging**: Non-blocking logging to maintain application performance.
-- **Structured Logging**: Supports JSON and other structured formats for clear, queryable logs.
-- **Customizable Log Levels**: Tailor log levels to fit your application's needs.
-- **Redaction Capabilities**: Securely redact sensitive information from your logs.
-- **Extensible Architecture**: Plug in additional handlers for specialized logging (e.g., file, network).
-- **Cross-Platform Compatibility**: Consistent functionality across different platforms.
-- **Intuitive API**: A simple, clear API that aligns with Zig's philosophy.
+- **⚡ Zero Allocations**: All formatting happens in stack-allocated buffers - no hidden heap allocations
+- **🎯 Structured Logging**: Type-safe key-value fields with compile-time validation
+- **⚙️ Compile-Time Configuration**: Buffer sizes, field limits, and log levels configured at compile time
+- **🔍 Level Filtering**: Efficient compile-time and runtime log level filtering (12ns)
+- **📋 JSON Output**: First-class JSON formatting with optimized escaping
+- **📦 Zero Dependencies**: Only Zig standard library
 
 ## Getting Started
 
@@ -26,57 +24,7 @@ zlog is a high-performance, extensible logging library for Zig, designed to offe
 
 1. Declare zlog as a dependency in `build.zig.zon`:
 
-    ```diff
-    .{
-        .name = "my-project",
-        .version = "1.0.0",
-        .paths = .{""},
-        .dependencies = .{
-    +       .zlog = .{
-    +           .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
-    +       },
-        },
-    }
-    ```
-
-2. Add it to your `build.zig`:
-
-    ```diff
-    const std = @import("std");
-
-    pub fn build(b: *std.Build) void {
-        const target = b.standardTargetOptions(.{});
-        const optimize = b.standardOptimizeOption(.{});
-
-    +   const opts = .{ .target = target, .optimize = optimize };
-    +   const zlog_module = b.dependency("zlog", opts).module("zlog");
-
-        const exe = b.addExecutable(.{
-            .name = "test",
-            .root_source_file = .{ .path = "src/main.zig" },
-            .target = target,
-            .optimize = optimize,
-        });
-    +   exe.addModule("zlog", zlog_module);
-        exe.install();
-
-        ...
-    }
-    ```
-
-3. Get zlog package hash:
-
-    ```
-    $ zig build
-    my-project/build.zig.zon:6:20: error: url field is missing corresponding hash field
-            .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
-                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    note: expected .hash = "<HASH>",
-    ```
-
-4. Update `build.zig.zon` package hash value:
-
-    ```diff
+    ```zig
     .{
         .name = "my-project",
         .version = "1.0.0",
@@ -84,48 +32,156 @@ zlog is a high-performance, extensible logging library for Zig, designed to offe
         .dependencies = .{
             .zlog = .{
                 .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
-    +           .hash = "<HASH>",
+                .hash = "<HASH>",
             },
         },
+    }
+    ```
+
+2. Add it to your `build.zig`:
+
+    ```zig
+    const std = @import("std");
+
+    pub fn build(b: *std.Build) void {
+        const target = b.standardTargetOptions(.{});
+        const optimize = b.standardOptimizeOption(.{});
+
+        const opts = .{ .target = target, .optimize = optimize };
+        const zlog_module = b.dependency("zlog", opts).module("zlog");
+
+        const exe = b.addExecutable(.{
+            .name = "app",
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        exe.root_module.addImport("zlog", zlog_module);
+        b.installArtifact(exe);
     }
     ```
 
 ### Basic Usage
 
 ```zig
+const std = @import("std");
 const zlog = @import("zlog");
 
-// Set up your logger
-var logger = zlog.Logger.init(allocator, zlog.Level.Info, zlog.OutputFormat.JSON, handler);
+pub fn main() !void {
+    // Create a logger with default configuration
+    var logger = zlog.default();
+    
+    // Simple logging
+    logger.info("Application started", &.{});
+    
+    // Structured logging with fields
+    logger.info("User logged in", &.{
+        zlog.field.string("username", "alice"),
+        zlog.field.uint("user_id", 12345),
+        zlog.field.string("ip", "192.168.1.1"),
+    });
+    
+    // Different log levels
+    logger.debug("Debug information", &.{
+        zlog.field.string("module", "auth"),
+    });
+    
+    logger.err("Connection failed", &.{
+        zlog.field.string("host", "api.example.com"),
+        zlog.field.int("port", 443),
+        zlog.field.float("timeout_seconds", 30.0),
+    });
+}
 ```
 
-Here is a basic usage example of zlog:
-```zig
-// Simple logging
-logger.log("This is an info log message");
-
-// Asynchronous logging
-logger.asyncLog("This is an error log message");
+Output:
+```json
+{"level":"Info","message":"Application started"}
+{"level":"Info","message":"User logged in","username":"alice","user_id":12345,"ip":"192.168.1.1"}
+{"level":"Error","message":"Connection failed","host":"api.example.com","port":443,"timeout_seconds":30}
 ```
 
-### Structured Logging
+### Custom Configuration
+
 ```zig
-// Log with structured data
-logger.info("Test message", &[_]kv.KeyValue{
-    kv.KeyValue{ .key = "key1", .value = kv.Value{ .String = "value1" } },
-    kv.KeyValue{ .key = "key2", .value = kv.Value{ .Int = 42 } },
-    kv.KeyValue{ .key = "key3", .value = kv.Value{ .Float = 3.14 } },
-});
+// Create a logger with custom configuration
+const Config = zlog.Config{
+    .level = .debug,        // Minimum level to log
+    .max_fields = 64,       // Maximum fields per message
+    .buffer_size = 8192,    // Buffer size for formatting
+};
+
+var logger = zlog.Logger(Config).init(writer);
+```
+
+### Field Types
+
+zlog supports multiple field types for structured logging:
+
+```zig
+// String fields
+zlog.field.string("name", "Alice")
+
+// Integer fields (signed and unsigned)
+zlog.field.int("temperature", -10)
+zlog.field.uint("count", 42)
+
+// Floating point
+zlog.field.float("pi", 3.14159)
+
+// Boolean
+zlog.field.boolean("enabled", true)
+
+// Null values
+zlog.field.null_value("optional_field")
+```
+
+### Log Levels
+
+Available log levels in order of severity:
+
+```zig
+logger.trace("Detailed trace information", &.{});
+logger.debug("Debug information", &.{});  
+logger.info("Informational message", &.{});
+logger.warn("Warning message", &.{});
+logger.err("Error message", &.{});
+logger.fatal("Fatal error", &.{});
+```
+
+
+## Building & Development
+
+```bash
+# Run tests
+zig build test
+
+# Run benchmarks
+zig build bench
+
+# Run isolated performance analysis
+zig build isolated
+
+# Run memory allocation benchmarks
+zig build memory
+
+# Build library
+zig build
+
+# Format code
+zig fmt src/ benchmarks/
 ```
 
 ## Contributing
 
-The main purpose of this repository is to continue to evolve zlog, making it faster and more efficient. We are grateful to the community for contributing bugfixes and improvements. Read below to learn how you can take part in improving zBench.
+The main purpose of this repository is to continue to evolve zlog, making it faster and more efficient while maintaining the highest safety standards. We are grateful to the community for contributing bugfixes and improvements. 
 
-### Contributing Guide
+Read our [contributing guide](CONTRIBUTING.md) to learn about our development process, which includes adherence to TigerStyle guidelines and safety-critical coding standards.
 
-Read our [contributing guide](CONTRIBUTING.md) to learn about our development process, how to propose bugfixes and improvements, and how to build and test your changes to zlog.
-
-### License
+## License
 
 zlog is [MIT licensed](./LICENSE).
+
+---
+
+*Built with ⚡ performance and 🛡️ safety in mind for production Zig applications.*
