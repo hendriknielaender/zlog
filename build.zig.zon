@@ -5,12 +5,12 @@
     .minimum_zig_version = "0.14.0",
     .dependencies = .{
         .zbench = .{
-            .url = "https://github.com/hendriknielaender/zBench/archive/main.tar.gz",
+            .url = "git+https://github.com/hendriknielaender/zBench#c64bb43a3e32c5c62c02058ad7247e072301708d",
             .hash = "zbench-0.10.0-YTdc714iAQDO4lTHMnIljYHPZ5v_sNTsw75vAmO1pyT-",
         },
         .libxev = .{
-            .url = "https://github.com/mitchellh/libxev/archive/main.tar.gz",
-            .hash = "libxev-0.0.0-86vtc87kEgBxgbJ1RI1R6Elynb7zydCgNR8dt3uw01My",
+            .url = "git+https://github.com/mitchellh/libxev#5647630d7bff969414a0edc24c03c30aff34b101",
+            .hash = "libxev-0.0.0-86vtc4b1EgCl0Kvo2Ixmjfl5PgAaJmvCXRIn_n89nCaR",
         },
     },
     .paths = .{
