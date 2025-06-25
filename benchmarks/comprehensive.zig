@@ -26,7 +26,7 @@ fn benchmarkJsonFormat(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
         zlog.field.string("user_id", "12345"),
         zlog.field.string("action", "login"),
@@ -41,7 +41,7 @@ fn benchmarkSimpleLogging(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
         zlog.field.string("service", "auth"),
         zlog.field.string("operation", "login"),
@@ -55,7 +55,7 @@ fn benchmarkLargeFields(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     
     // Create large data payload
     const large_data = "This is a very long string that represents a large data payload that might be logged in production systems. It contains detailed information about the operation, user context, system state, and various metadata that could be relevant for debugging and monitoring purposes.";
@@ -75,7 +75,7 @@ fn benchmarkManyFields(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     
     // Create many fields (up to max supported by zlog)
     const fields = [_]zlog.Field{
@@ -105,7 +105,7 @@ fn benchmarkNumericFields(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
         zlog.field.uint("user_id", 12345),
         zlog.field.uint("session_id", 67890),
@@ -123,7 +123,7 @@ fn benchmarkMixedFields(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
         zlog.field.string("user", "john_doe"),
         zlog.field.uint("age", 30),
@@ -143,7 +143,7 @@ fn benchmarkErrorLogging(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
         zlog.field.string("error", "DatabaseConnectionFailed"),
         zlog.field.string("component", "user_service"),
@@ -161,7 +161,7 @@ fn benchmarkHighThroughput(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
         zlog.field.string("event", "request"),
         zlog.field.uint("id", 12345),
@@ -181,7 +181,7 @@ fn benchmarkMinimalLogging(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
         zlog.field.uint("id", 42),
     };
@@ -194,7 +194,7 @@ fn benchmarkNoFields(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{};
 
     logger.infoWithTrace("No fields benchmark", trace_ctx, &fields);
@@ -205,7 +205,7 @@ fn benchmarkLongMessage(allocator: std.mem.Allocator) void {
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
         zlog.field.string("component", "message_processor"),
         zlog.field.uint("length", 512),

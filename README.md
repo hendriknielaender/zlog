@@ -26,22 +26,17 @@ zlog is a high-performance, extensible logging library for Zig, designed to offe
             .url = "https://github.com/hendriknielaender/zlog/archive/<COMMIT>.tar.gz",
             .hash = "<HASH>",
         },
-        .libxev = .{
-            .url = "https://github.com/mitchellh/libxev/archive/<COMMIT>.tar.gz", 
-            .hash = "<HASH>",
-        },
     },
 }
 ```
+
+> **Note**: libxev is automatically included as a peer dependency of zlog for async logging support.
 
 2. Configure in `build.zig`:
 
 ```zig
 const zlog_module = b.dependency("zlog", opts).module("zlog");
-const libxev_module = b.dependency("libxev", opts).module("xev");
-
 exe.root_module.addImport("zlog", zlog_module);
-exe.root_module.addImport("xev", libxev_module); // For async logging
 ```
 
 ### Basic Usage
@@ -55,7 +50,7 @@ pub fn main() !void {
     var logger = zlog.default();
     
     // Simple logging with trace context
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     logger.infoWithTrace("Service started", trace_ctx, &.{
         zlog.field.string("version", "1.0.0"),
         zlog.field.uint("port", 8080),
@@ -78,7 +73,7 @@ For maximum throughput in high-load scenarios:
 ```zig
 const std = @import("std");
 const zlog = @import("zlog");
-const xev = @import("xev");
+const xev = @import("xev"); // Available through zlog's peer dependencies
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
@@ -100,7 +95,7 @@ pub fn main() !void {
     var logger = try zlog.Logger(config).initAsync(stdout.any(), &loop, gpa.allocator());
     defer logger.deinit();
 
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
     
     // Log messages per second
     for (0..1_000_000) |i| {
@@ -158,6 +153,48 @@ zlog.field.boolean("success", true)
 zlog.field.null_value("optional_data")
 ```
 
+## Field Redaction
+
+zlog provides a hybrid compile-time and runtime redaction system for sensitive data:
+
+### Compile-time Redaction (Zero Cost)
+
+```zig
+// Define sensitive fields at compile-time
+var logger = zlog.loggerWithRedaction(.{
+    .redacted_fields = &.{ "password", "api_key", "ssn" },
+});
+
+// These fields will be automatically redacted with zero runtime cost
+logger.info("User login", &.{
+    zlog.field.string("username", "alice"),
+    zlog.field.string("password", "secret123"), // Output: [REDACTED:string]
+});
+```
+
+### Runtime Redaction (Dynamic)
+
+```zig
+var redaction_config = zlog.RedactionConfig.init(allocator);
+defer redaction_config.deinit();
+
+try redaction_config.addKey("credit_card");
+try redaction_config.addKey("phone");
+
+var logger = zlog.Logger(.{}).initWithRedaction(writer, &redaction_config);
+```
+
+### Hybrid Approach
+
+```zig
+// Combine compile-time and runtime redaction
+const SecureLogger = zlog.LoggerWithRedaction(.{}, .{
+    .redacted_fields = &.{ "password", "token" }, // Compile-time
+});
+
+var logger = SecureLogger.initWithRedaction(writer, &runtime_config);
+```
+
 ## Log Levels
 
 ```zig
@@ -186,7 +223,7 @@ zig build test
 Full distributed tracing support with pre-formatted hex strings for maximum performance:
 
 ```zig
-const trace_ctx = zlog.TraceContextImpl.init(true);
+const trace_ctx = zlog.TraceContext.init(true);
 logger.infoWithTrace("Request processed", trace_ctx, &.{
     zlog.field.string("service", "api"),
     zlog.field.uint("status_code", 200),
@@ -202,7 +239,7 @@ zlog provides full W3C Trace Context specification compliance:
 
 ```zig
 // Create trace context
-const trace_ctx = zlog.TraceContextImpl.init(true);
+const trace_ctx = zlog.TraceContext.init(true);
 
 // Child spans maintain trace correlation
 const child_ctx = trace_ctx.createChild(true);
