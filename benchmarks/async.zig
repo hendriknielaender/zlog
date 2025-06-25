@@ -35,7 +35,7 @@ pub fn main() !void {
     defer logger.deinit();
 
     // Create trace context for all operations
-    const trace_ctx = zlog.TraceContextImpl.init(true);
+    const trace_ctx = zlog.TraceContext.init(true);
 
     // Pre-create fields to avoid allocation during benchmark
     const benchmark_fields = [_]zlog.Field{

@@ -1,12 +1,49 @@
+//! # zlog - High-Performance Structured Logging Library
+//!
+//! zlog is a zero-allocation structured logging library for Zig with distributed tracing support.
+//! 
+//! ## Features
+//! 
+//! - **Zero-allocation logging** in hot paths for maximum performance
+//! - **Hybrid redaction system** with compile-time (zero-cost) and runtime configuration
+//! - **W3C Trace Context** compliance for distributed tracing
+//! - **Structured JSON output** with customizable fields
+//! - **Async logging** with libxev integration for high-throughput scenarios
+//! - **Explicit dependency injection** following Zig philosophy (no hidden global state)
+//! 
+//! ## Basic Usage
+//! 
+//! ```zig
+//! const zlog = @import("zlog");
+//! 
+//! // Simple logging
+//! var logger = zlog.default();
+//! logger.info("Hello, world!", &.{
+//!     zlog.Field.string("key", "value"),
+//!     zlog.Field.int("count", 42),
+//! });
+//! 
+//! // Compile-time redaction (zero cost)
+//! var secure_logger = zlog.loggerWithRedaction(.{
+//!     .redacted_fields = &.{ "password", "api_key" },
+//! });
+//! ```
+//! 
+//! ## Architecture
+//! 
+//! zlog follows Zig's principles of explicitness and zero-cost abstractions,
+//! drawing inspiration from std.log's compile-time configuration while adding
+//! structured logging capabilities and flexible redaction.
+
 const std = @import("std");
 const assert = std.debug.assert;
 const xev = @import("xev");
 
-// Distributed trace context implementation following trace context specification
+// Core constants
 const hex_chars_lower = "0123456789abcdef";
 
 /// Trace context errors for parsing and validation.
-const TraceError = error{
+pub const TraceError = error{
     InvalidLength,
     InvalidVersion, 
     InvalidTraceId,
@@ -18,7 +55,7 @@ const TraceError = error{
 };
 
 /// Trace flags for sampling and other trace options.
-const TraceFlags = packed struct {
+pub const TraceFlags = packed struct {
     sampled: bool,      // Bit 0: sampling decision
     reserved_1: bool = false,   // Bit 1: reserved (must be 0)
     reserved_2: bool = false,   // Bit 2: reserved (must be 0) 
@@ -49,7 +86,7 @@ const TraceFlags = packed struct {
 };
 
 /// High-performance trace context with pre-formatted hex strings for zero-allocation logging.
-const TraceContext = struct {
+pub const TraceContext = struct {
     version: u8,           // Always 00 for current specification
     trace_id: [16]u8,      // 128-bit trace identifier (binary)
     parent_id: [8]u8,      // 64-bit parent span identifier (binary)
@@ -249,45 +286,6 @@ fn bytes_to_hex_lowercase(bytes_input: []const u8, hexadecimal_buffer: []u8) ![]
     return hex_result;
 }
 
-/// Convert lowercase hex string to byte array for trace parsing.
-fn hex_lowercase_to_bytes(hex_string: []const u8, bytes_buffer: []u8) TraceError![]u8 {
-    assert(hex_string.len > 0);
-    assert(hex_string.len % 2 == 0); // Must be even number of hex chars
-    assert(bytes_buffer.len >= hex_string.len / 2);
-    
-    const byte_count = hex_string.len / 2;
-    
-    for (0..byte_count) |byte_index| {
-        const hex_start_index = byte_index * 2;
-        const high_char = hex_string[hex_start_index];
-        const low_char = hex_string[hex_start_index + 1];
-        
-        const high_nibble = hex_char_to_nibble(high_char) catch return TraceError.InvalidHexChar;
-        const low_nibble = hex_char_to_nibble(low_char) catch return TraceError.InvalidHexChar;
-        
-        bytes_buffer[byte_index] = (high_nibble << 4) | low_nibble;
-    }
-    
-    const bytes_result = bytes_buffer[0..byte_count];
-    assert(bytes_result.len == byte_count); // Verify output length
-    return bytes_result;
-}
-
-/// Convert single hex character to 4-bit nibble value.
-fn hex_char_to_nibble(hex_char: u8) TraceError!u4 {
-    assert(hex_char <= 255); // u8 range check
-    
-    const nibble_value: u4 = switch (hex_char) {
-        '0'...'9' => @intCast(hex_char - '0'),
-        'a'...'f' => @intCast(hex_char - 'a' + 10),
-        'A'...'F' => @intCast(hex_char - 'A' + 10), // Accept uppercase but discouraged
-        else => return TraceError.InvalidHexChar,
-    };
-    
-    assert(nibble_value <= 15); // Verify nibble range
-    return nibble_value;
-}
-
 threadlocal var current_task_context: ?*TaskContext = null;
 
 /// Generate unique task ID.
@@ -386,6 +384,22 @@ pub const Field = struct {
         float: f64,
         boolean: bool,
         null: void,
+        redacted: RedactedValue,
+    };
+
+    /// RedactedValue holds the original type information and optional hint.
+    pub const RedactedValue = struct {
+        value_type: RedactedType,
+        hint: ?[]const u8,
+    };
+
+    /// Types that can be redacted.
+    pub const RedactedType = enum {
+        string,
+        int,
+        uint,
+        float,
+        any,
     };
 
     /// Creates a string field.
@@ -451,6 +465,51 @@ pub const Field = struct {
         assert(field_result.key.len > 0); // Verify field integrity
         assert(field_result.value == .null); // Verify null value
         return field_result;
+    }
+
+
+};
+
+/// Compile-time redaction configuration for zero-cost field filtering.
+/// Following std.log's compile-time configuration pattern.
+pub const RedactionOptions = struct {
+    /// List of field keys that should be redacted at compile-time.
+    /// This enables zero-cost redaction when field names are known at compile-time.
+    redacted_fields: []const []const u8 = &.{},
+};
+
+/// Runtime redaction configuration for dynamic field filtering.
+/// Follows Zig's explicit dependency injection pattern.
+pub const RedactionConfig = struct {
+    const Self = @This();
+    
+    redacted_keys: std.StringHashMap(void),
+    
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .redacted_keys = std.StringHashMap(void).init(allocator),
+        };
+    }
+    
+    pub fn deinit(self: *Self) void {
+        self.redacted_keys.deinit();
+    }
+    
+    /// Add a field key that should be redacted when logged.
+    pub fn addKey(self: *Self, key: []const u8) !void {
+        assert(key.len > 0);
+        assert(key.len < 512); // Reasonable key length limit
+        try self.redacted_keys.put(key, {});
+    }
+    
+    /// Check if a field key should be redacted.
+    pub fn shouldRedact(self: *const Self, key: []const u8) bool {
+        return self.redacted_keys.contains(key);
+    }
+    
+    /// Get count of redacted keys (useful for testing/debugging).
+    pub fn count(self: *const Self) u32 {
+        return @intCast(self.redacted_keys.count());
     }
 };
 
@@ -817,7 +876,13 @@ pub const LogEvent = struct {
 };
 
 /// Logger provides structured logging with zero allocations.
+/// Supports both compile-time and runtime redaction configuration.
 pub fn Logger(comptime config: Config) type {
+    return LoggerWithRedaction(config, .{});
+}
+
+/// Logger with compile-time redaction configuration for zero-cost field filtering.
+pub fn LoggerWithRedaction(comptime config: Config, comptime redaction_options: RedactionOptions) type {
     comptime {
         assert(config.max_fields > 0);
         assert(config.buffer_size >= 256);
@@ -830,22 +895,30 @@ pub fn Logger(comptime config: Config) type {
         const buffer_size = config.buffer_size;
         const async_mode = config.async_mode;
         const async_queue_size = config.async_queue_size;
+        const compile_time_redacted_fields = redaction_options.redacted_fields;
 
         writer: std.io.AnyWriter,
         mutex: std.Thread.Mutex = .{},
         level: Level,
+        redaction_config: ?*const RedactionConfig,
         
         // Async mode fields (only used when async_mode = true)
         async_logger: if (async_mode) ?AsyncLogger else void = if (async_mode) null else {},
 
         /// Initialize a new logger with the given writer.
         pub fn init(output_writer: std.io.AnyWriter) Self {
+            return initWithRedaction(output_writer, null);
+        }
+        
+        /// Initialize a new logger with the given writer and optional redaction config.
+        pub fn initWithRedaction(output_writer: std.io.AnyWriter, redaction_config: ?*const RedactionConfig) Self {
             assert(@TypeOf(output_writer) == std.io.AnyWriter);
             assert(@intFromEnum(config.level) <= @intFromEnum(Level.fatal));
             
             const logger_result = Self{
                 .writer = output_writer,
                 .level = config.level,
+                .redaction_config = redaction_config,
                 .async_logger = if (async_mode) null else {},
             };
             
@@ -860,9 +933,19 @@ pub fn Logger(comptime config: Config) type {
             event_loop: *xev.Loop, 
             memory_allocator: std.mem.Allocator,
         ) !Self {
+            return initAsyncWithRedaction(output_writer, event_loop, memory_allocator, null);
+        }
+        
+        /// Initialize async logger with event loop and optional redaction config (only available in async mode).
+        pub fn initAsyncWithRedaction(
+            output_writer: std.io.AnyWriter, 
+            event_loop: *xev.Loop, 
+            memory_allocator: std.mem.Allocator,
+            redaction_config: ?*const RedactionConfig,
+        ) !Self {
             comptime {
                 if (!async_mode) {
-                    @compileError("initAsync() requires async_mode = true in config");
+                    @compileError("initAsyncWithRedaction() requires async_mode = true in config");
                 }
             }
             
@@ -878,6 +961,7 @@ pub fn Logger(comptime config: Config) type {
             const logger_result = Self{
                 .writer = output_writer,
                 .level = config.level,
+                .redaction_config = redaction_config,
                 .async_logger = async_logger_instance,
             };
             
@@ -894,6 +978,18 @@ pub fn Logger(comptime config: Config) type {
                 }
             }
         }
+        
+        /// Check if a field should be redacted using hybrid compile-time + runtime approach.
+        /// Compile-time checks are zero-cost, runtime checks provide flexibility.
+        fn shouldRedact(self: *const Self, key: []const u8) bool {
+            // Compile-time check first (zero cost) - like std.log
+            inline for (compile_time_redacted_fields) |redacted_field| {
+                if (std.mem.eql(u8, redacted_field, key)) return true;
+            }
+            
+            // Runtime check for dynamic redaction config
+            return if (self.redaction_config) |rc| rc.shouldRedact(key) else false;
+        }
 
         /// Log a message at the trace level.
         pub fn trace(self: *Self, trace_message: []const u8, trace_fields: []const Field) void {
@@ -907,7 +1003,7 @@ pub fn Logger(comptime config: Config) type {
             assert(trace_fields.len <= 1024); // Reasonable upper bound
             
             // Create default trace context for backward compatibility
-            const default_trace_ctx = TraceContextImpl.init(false);
+            const default_trace_ctx = TraceContext.init(false);
             self.logWithTrace(.trace, trace_message, default_trace_ctx, trace_fields);
         }
 
@@ -923,7 +1019,7 @@ pub fn Logger(comptime config: Config) type {
             assert(debug_fields.len <= 1024); // Reasonable upper bound
             
             // Create default trace context for backward compatibility
-            const default_trace_ctx = TraceContextImpl.init(false);
+            const default_trace_ctx = TraceContext.init(false);
             self.logWithTrace(.debug, debug_message, default_trace_ctx, debug_fields);
         }
 
@@ -939,7 +1035,7 @@ pub fn Logger(comptime config: Config) type {
             assert(info_fields.len <= 1024); // Reasonable upper bound
             
             // Create default trace context for backward compatibility
-            const default_trace_ctx = TraceContextImpl.init(false);
+            const default_trace_ctx = TraceContext.init(false);
             self.logWithTrace(.info, info_message, default_trace_ctx, info_fields);
         }
         
@@ -947,7 +1043,7 @@ pub fn Logger(comptime config: Config) type {
         pub fn infoWithTrace(
             self: *Self, 
             info_message: []const u8, 
-            trace_ctx: TraceContextImpl, 
+            trace_ctx: TraceContext, 
             info_fields: []const Field,
         ) void {
             comptime {
@@ -973,7 +1069,7 @@ pub fn Logger(comptime config: Config) type {
             assert(warn_fields.len <= 1024); // Reasonable upper bound
             
             // Create default trace context for backward compatibility
-            const default_trace_ctx = TraceContextImpl.init(false);
+            const default_trace_ctx = TraceContext.init(false);
             self.logWithTrace(.warn, warn_message, default_trace_ctx, warn_fields);
         }
 
@@ -989,7 +1085,7 @@ pub fn Logger(comptime config: Config) type {
             assert(error_fields.len <= 1024); // Reasonable upper bound
             
             // Create default trace context for backward compatibility
-            const default_trace_ctx = TraceContextImpl.init(false);
+            const default_trace_ctx = TraceContext.init(false);
             self.logWithTrace(.err, error_message, default_trace_ctx, error_fields);
         }
 
@@ -1005,7 +1101,7 @@ pub fn Logger(comptime config: Config) type {
             assert(fatal_fields.len <= 1024); // Reasonable upper bound
             
             // Create default trace context for backward compatibility
-            const default_trace_ctx = TraceContextImpl.init(false);
+            const default_trace_ctx = TraceContext.init(false);
             self.logWithTrace(.fatal, fatal_message, default_trace_ctx, fatal_fields);
         }
 
@@ -1072,7 +1168,7 @@ pub fn Logger(comptime config: Config) type {
             self: *Self, 
             level: Level, 
             message: []const u8, 
-            trace_ctx: TraceContextImpl, 
+            trace_ctx: TraceContext, 
             fields: []const Field,
         ) void {
             comptime {
@@ -1117,13 +1213,35 @@ pub fn Logger(comptime config: Config) type {
             // Add fields
             for (fields) |field_item| {
                 writer.print(",\"{s}\":", .{field_item.key}) catch return;
-                switch (field_item.value) {
-                    .string => |s| writer.print("\"{s}\"", .{s}) catch return,
-                    .int => |i| writer.print("{}", .{i}) catch return,
-                    .uint => |u| writer.print("{}", .{u}) catch return,
-                    .float => |f| writer.print("{d:.5}", .{f}) catch return,
-                    .boolean => |b| writer.writeAll(if (b) "true" else "false") catch return,
-                    .null => writer.writeAll("null") catch return,
+                
+                // Check if this field should be redacted
+                if (self.shouldRedact(field_item.key)) {
+                    const redacted_type: Field.RedactedType = switch (field_item.value) {
+                        .string => .string,
+                        .int => .int,
+                        .uint => .uint,
+                        .float => .float,
+                        .boolean => .any,
+                        .null => .any,
+                        .redacted => |r| r.value_type,
+                    };
+                    writer.print("\"[REDACTED:{s}]\"", .{@tagName(redacted_type)}) catch return;
+                } else {
+                    switch (field_item.value) {
+                        .string => |s| writer.print("\"{s}\"", .{s}) catch return,
+                        .int => |i| writer.print("{}", .{i}) catch return,
+                        .uint => |u| writer.print("{}", .{u}) catch return,
+                        .float => |f| writer.print("{d:.5}", .{f}) catch return,
+                        .boolean => |b| writer.writeAll(if (b) "true" else "false") catch return,
+                        .null => writer.writeAll("null") catch return,
+                        .redacted => |r| {
+                            if (r.hint) |hint| {
+                                writer.print("\"[REDACTED:{s}:{s}]\"", .{ @tagName(r.value_type), hint }) catch return;
+                            } else {
+                                writer.print("\"[REDACTED:{s}]\"", .{@tagName(r.value_type)}) catch return;
+                            }
+                        },
+                    }
                 }
             }
             
@@ -1161,6 +1279,7 @@ pub fn Logger(comptime config: Config) type {
                 buffer_size,
                 self.writer,
                 &self.mutex,
+                self.redaction_config,
             );
         }
 
@@ -1174,8 +1293,112 @@ pub fn Logger(comptime config: Config) type {
         ) !u32 {
             assert(fields.len <= max_fields);
             assert(@intFromEnum(level) <= @intFromEnum(Level.fatal));
-            _ = self;
-            return format_json_record(writer, level, message, fields, max_fields, buffer_size);
+            return format_json_record_with_logger(writer, level, message, fields, max_fields, buffer_size, self);
+        }
+        
+        /// Format a log record with logger context for hybrid redaction.
+        fn format_json_record_with_logger(
+            writer: anytype,
+            level: Level,
+            message: []const u8,
+            fields: []const Field,
+            max_fields_limit: u16,
+            buffer_size_limit: u32,
+            logger: *const Self,
+        ) !u32 {
+            assert(fields.len <= max_fields_limit);
+            assert(message.len < buffer_size_limit / 2);
+
+            const start_position = try writer.context.getPos();
+
+            try writer.writeByte('{');
+
+            // Write the level field.
+            try writer.writeAll("\"level\":\"");
+            try writer.writeAll(@tagName(level));
+            try writer.writeAll("\"");
+
+            // Write the message field.
+            try writer.writeAll(",\"msg\":\"");
+            try write_escaped_string(writer, message);
+            try writer.writeByte('"');
+
+            // Write timestamp.
+            const timestamp_ms = std.time.milliTimestamp();
+            const thread_id = std.Thread.getCurrentId();
+            const trace_ctx = TraceContext.init(true);
+
+            try writer.writeAll(",\"trace\":\"");
+            try writer.writeAll(&trace_ctx.trace_id_hex);
+            try writer.writeAll("\",\"span\":\"");
+            try writer.writeAll(&trace_ctx.span_id_hex);
+            try writer.print("\",\"ts\":{d},\"tid\":{d}", .{ timestamp_ms, thread_id });
+
+            // Write fields.
+            for (fields[0..@min(fields.len, max_fields_limit)]) |field_item| {
+                try writer.writeByte(',');
+                try writer.writeByte('"');
+                try write_escaped_string(writer, field_item.key);
+                try writer.writeAll("\":");
+
+                // Check if this field should be redacted using hybrid method
+                if (logger.shouldRedact(field_item.key)) {
+                    const redacted_type: Field.RedactedType = switch (field_item.value) {
+                        .string => .string,
+                        .int => .int,
+                        .uint => .uint,
+                        .float => .float,
+                        .boolean => .any,
+                        .null => .any,
+                        .redacted => |r| r.value_type,
+                    };
+                    try writer.writeByte('"');
+                    try writer.writeAll("[REDACTED:");
+                    try writer.writeAll(@tagName(redacted_type));
+                    try writer.writeByte(']');
+                    try writer.writeByte('"');
+                } else {
+                    switch (field_item.value) {
+                        .string => |str_val| {
+                            try writer.writeByte('"');
+                            try write_escaped_string(writer, str_val);
+                            try writer.writeByte('"');
+                        },
+                        .int => |int_val| {
+                            try writer.print("{d}", .{int_val});
+                        },
+                        .uint => |uint_val| {
+                            try writer.print("{d}", .{uint_val});
+                        },
+                        .float => |float_val| {
+                            try writer.print("{d}", .{float_val});
+                        },
+                        .boolean => |bool_val| {
+                            try writer.writeAll(if (bool_val) "true" else "false");
+                        },
+                        .null => {
+                            try writer.writeAll("null");
+                        },
+                        .redacted => |redacted_val| {
+                            try writer.writeByte('"');
+                            try writer.writeAll("[REDACTED:");
+                            try writer.writeAll(@tagName(redacted_val.value_type));
+                            if (redacted_val.hint) |hint_text| {
+                                try writer.writeByte(':');
+                                try write_escaped_string(writer, hint_text);
+                            }
+                            try writer.writeByte(']');
+                            try writer.writeByte('"');
+                        },
+                    }
+                }
+            }
+
+            try writer.writeByte('}');
+            try writer.writeByte('\n');
+
+            const end_position = try writer.context.getPos();
+            return @intCast(end_position - start_position);
         }
     };
 }
@@ -1456,6 +1679,13 @@ const AsyncLogger = struct {
                 .float => |f| try writer.print("{d:.5}", .{f}),
                 .boolean => |b| try writer.writeAll(if (b) "true" else "false"),
                 .null => try writer.writeAll("null"),
+                .redacted => |r| {
+                    if (r.hint) |hint| {
+                        try writer.print("\"[REDACTED:{s}:{s}]\"", .{ @tagName(r.value_type), hint });
+                    } else {
+                        try writer.print("\"[REDACTED:{s}]\"", .{@tagName(r.value_type)});
+                    }
+                },
             }
         }
         
@@ -1483,42 +1713,6 @@ fn validateFieldCountStandalone(field_array_length: u32, max_fields_configured: 
     return field_count_clamped;
 }
 
-/// Execute the complete logging pipeline without self parameter.
-fn executeLoggingPipelineStandalone(
-    level: Level,
-    current_level: Level,
-    message: []const u8,
-    fields: []const Field,
-    max_fields_limit: u16,
-    buffer_size_limit: u32,
-    writer: std.io.AnyWriter,
-    mutex: *std.Thread.Mutex,
-    buffer: []u8,
-) void {
-    assert(@intFromEnum(level) <= @intFromEnum(Level.fatal));
-    assert(@intFromEnum(current_level) <= @intFromEnum(Level.fatal));
-    assert(message.len < buffer_size_limit);
-    assert(max_fields_limit > 0);
-    assert(buffer_size_limit >= 256);
-    assert(buffer.len >= buffer_size_limit);
-
-    // Early return for filtered levels
-    if (@intFromEnum(level) < @intFromEnum(current_level)) return;
-
-    const field_count = validateFieldCountStandalone(fields.len, max_fields_limit);
-
-    writeLogMessageStandalone(
-        level,
-        message,
-        fields[0..field_count],
-        buffer[0..buffer_size_limit],
-        max_fields_limit,
-        buffer_size_limit,
-        writer,
-        mutex,
-    );
-}
-
 /// Write formatted log message to output without self parameter.
 fn writeLogMessageStandalone(
     level: Level,
@@ -1529,6 +1723,7 @@ fn writeLogMessageStandalone(
     buffer_size_limit: u32,
     writer: std.io.AnyWriter,
     mutex: *std.Thread.Mutex,
+    redaction_config: ?*const RedactionConfig,
 ) void {
     assert(fields.len <= max_fields_limit);
     assert(message.len < buffer_size_limit / 2);
@@ -1543,6 +1738,7 @@ fn writeLogMessageStandalone(
         fields,
         max_fields_limit,
         buffer_size_limit,
+        redaction_config,
     ) catch |format_err| {
         std.debug.print("zlog: format error: {}\n", .{format_err});
         return;
@@ -1567,6 +1763,7 @@ fn format_json_record(
     fields: []const Field,
     max_fields: u16,
     buffer_size: u32,
+    redaction_config: ?*const RedactionConfig,
 ) !u32 {
     assert(fields.len <= max_fields);
     assert(message.len < buffer_size / 2);
@@ -1592,23 +1789,52 @@ fn format_json_record(
         try write_escaped_string(writer, field_item.key);
         try writer.writeAll("\":");
 
-        switch (field_item.value) {
-            .string => |string_content| {
-                try writer.writeByte('"');
-                try write_escaped_string(writer, string_content);
-                try writer.writeByte('"');
-            },
-            .int => |signed_number| try std.fmt.formatInt(signed_number, 10, .lower, .{}, writer),
-            .uint => |number_content| try std.fmt.formatInt(
-                number_content,
-                10,
-                .lower,
-                .{},
-                writer,
-            ),
-            .float => |float_content| try writer.print("{d}", .{float_content}),
-            .boolean => |bool_content| try writer.writeAll(if (bool_content) "true" else "false"),
-            .null => try writer.writeAll("null"),
+        // Check if this field should be redacted (legacy runtime-only check)
+        if (redaction_config != null and redaction_config.?.shouldRedact(field_item.key)) {
+            const redacted_type: Field.RedactedType = switch (field_item.value) {
+                .string => .string,
+                .int => .int,
+                .uint => .uint,
+                .float => .float,
+                .boolean => .any,
+                .null => .any,
+                .redacted => |r| r.value_type,
+            };
+            try writer.writeByte('"');
+            try writer.writeAll("[REDACTED:");
+            try writer.writeAll(@tagName(redacted_type));
+            try writer.writeByte(']');
+            try writer.writeByte('"');
+        } else {
+            switch (field_item.value) {
+                .string => |string_content| {
+                    try writer.writeByte('"');
+                    try write_escaped_string(writer, string_content);
+                    try writer.writeByte('"');
+                },
+                .int => |signed_number| try std.fmt.formatInt(signed_number, 10, .lower, .{}, writer),
+                .uint => |number_content| try std.fmt.formatInt(
+                    number_content,
+                    10,
+                    .lower,
+                    .{},
+                    writer,
+                ),
+                .float => |float_content| try writer.print("{d}", .{float_content}),
+                .boolean => |bool_content| try writer.writeAll(if (bool_content) "true" else "false"),
+                .null => try writer.writeAll("null"),
+                .redacted => |r| {
+                    try writer.writeByte('"');
+                    try writer.writeAll("[REDACTED:");
+                    try writer.writeAll(@tagName(r.value_type));
+                    if (r.hint) |hint| {
+                        try writer.writeByte(':');
+                        try write_escaped_string(writer, hint);
+                    }
+                    try writer.writeByte(']');
+                    try writer.writeByte('"');
+                },
+            }
         }
     }
 
@@ -1670,7 +1896,7 @@ fn write_escaped_string(output_writer: anytype, input_string: []const u8) !void 
 
             // Write escaped character
             try writeEscapedCharacter(output_writer, current_char);
-            safe_batch_start = char_index + 1;
+            safe_batch_start = @as(u32, @intCast(char_index + 1));
         }
     }
 
@@ -1729,16 +1955,32 @@ pub fn asyncLogger(comptime custom_config: Config, output_writer: std.io.AnyWrit
     return custom_async_logger;
 }
 
-// Re-export commonly used types for convenience.
+/// Creates a logger with compile-time redaction configuration for zero-cost field filtering.
+pub fn loggerWithRedaction(comptime redaction_options: RedactionOptions) LoggerWithRedaction(.{}, redaction_options) {
+    const stderr_file = std.io.getStdErr();
+    const stderr_any_writer = stderr_file.writer().any();
+    
+    assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
+    assert(@TypeOf(stderr_file) == std.fs.File);
+    
+    const logger_result = LoggerWithRedaction(.{}, redaction_options).init(stderr_any_writer);
+    assert(@intFromEnum(logger_result.level) <= @intFromEnum(Level.fatal)); // Verify logger level
+    return logger_result;
+}
+
+// ===== PUBLIC API EXPORTS =====
+
+// Core types (use standard Zig naming)
 pub const field = Field;
 
-// Export trace context implementation for general systems programming
-pub const TraceContextImpl = TraceContext;
-pub const TraceFlagsImpl = TraceFlags;
-pub const traceIdFromShort = expand_short_to_trace_id;
-pub const shortFromTraceId = extract_short_from_trace_id;
-pub const sampleFromTraceId = should_sample_from_trace_id;
-pub const hexFromBytes = bytes_to_hex_lowercase;
+// Trace context types and utilities
+// (TraceContext and TraceFlags are already public)
+
+// Utility functions for advanced tracing scenarios
+pub const generateTraceId = generate_trace_id;
+pub const generateSpanId = generate_span_id;
+pub const isAllZeroId = is_all_zero_id;
+pub const bytesToHex = bytes_to_hex_lowercase;
 
 // Test suite for zlog functionality.
 const testing = std.testing;
@@ -2079,21 +2321,21 @@ test "LogEvent creation" {
     };
 
     // Create a test trace context with known trace ID
-    const test_trace_id = traceIdFromShort(123);
+    const test_trace_id = expand_short_to_trace_id(123);
     var test_span_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &test_span_bytes, 456, .big);
     
     // Pre-format hex strings
     var trace_hex_buf: [32]u8 = undefined;
     var span_hex_buf: [16]u8 = undefined;
-    _ = hexFromBytes(&test_trace_id, &trace_hex_buf) catch unreachable;
-    _ = hexFromBytes(&test_span_bytes, &span_hex_buf) catch unreachable;
+    _ = bytes_to_hex_lowercase(&test_trace_id, &trace_hex_buf) catch unreachable;
+    _ = bytes_to_hex_lowercase(&test_span_bytes, &span_hex_buf) catch unreachable;
     
     const test_trace_ctx = TraceContext{
         .version = 0x00,
         .trace_id = test_trace_id,
         .parent_id = test_span_bytes,
-        .trace_flags = TraceFlagsImpl.sampled_only(true),
+        .trace_flags = TraceFlags.sampled_only(true),
         .trace_id_hex = trace_hex_buf,
         .span_id_hex = span_hex_buf,
         .parent_span_hex = null,
@@ -2130,4 +2372,149 @@ test "Async mode configuration validation" {
 test "Default async logger creation" {
     // Skip async tests for now due to thread synchronization complexity
     try testing.expect(true);
+}
+
+
+
+test "RedactionConfig context pattern" {
+    const test_allocator = testing.allocator;
+    
+    // Create redaction config with explicit allocator
+    var redaction_config = RedactionConfig.init(test_allocator);
+    defer redaction_config.deinit();
+    
+    // Add redacted fields
+    try redaction_config.addKey("password");
+    try redaction_config.addKey("api_key");
+    try redaction_config.addKey("ssn");
+    
+    // Test shouldRedact
+    try testing.expect(redaction_config.shouldRedact("password") == true);
+    try testing.expect(redaction_config.shouldRedact("api_key") == true);
+    try testing.expect(redaction_config.shouldRedact("ssn") == true);
+    try testing.expect(redaction_config.shouldRedact("username") == false);
+    try testing.expect(redaction_config.shouldRedact("email") == false);
+    
+    // Test count functionality
+    try testing.expect(redaction_config.count() == 3);
+    
+    // Test duplicate addition (should not increase count)
+    try redaction_config.addKey("password"); // Add duplicate
+    try testing.expect(redaction_config.count() == 3); // Still 3, not 4
+}
+
+test "Context-based redaction in action" {
+    const test_allocator = testing.allocator;
+    
+    // Create redaction config
+    var redaction_config = RedactionConfig.init(test_allocator);
+    defer redaction_config.deinit();
+    
+    try redaction_config.addKey("password");
+    try redaction_config.addKey("secret");
+    
+    // Create test logger with redaction config
+    var log_output = std.ArrayList(u8).init(test_allocator);
+    defer log_output.deinit();
+    
+    var logger = Logger(.{}).initWithRedaction(log_output.writer().any(), &redaction_config);
+    
+    // Test that sensitive fields are redacted
+    logger.info("User login", &.{
+        Field.string("username", "alice"),
+        Field.string("password", "secret123"), // Should be redacted
+        Field.string("ip", "192.168.1.1"),
+    });
+    
+    // Verify the output
+    const output = log_output.items;
+    try testing.expect(std.mem.indexOf(u8, output, "alice") != null); // Username should be visible
+    try testing.expect(std.mem.indexOf(u8, output, "192.168.1.1") != null); // IP should be visible
+    try testing.expect(std.mem.indexOf(u8, output, "secret123") == null); // Password should be hidden
+    try testing.expect(std.mem.indexOf(u8, output, "[REDACTED:string]") != null); // Should contain redaction marker
+}
+
+test "Compile-time redaction - zero cost filtering" {
+    const test_allocator = testing.allocator;
+    
+    // Create logger with compile-time redaction (zero runtime cost)
+    const CompileTimeLogger = LoggerWithRedaction(.{}, .{
+        .redacted_fields = &.{ "password", "api_key", "secret" },
+    });
+    
+    var log_output = std.ArrayList(u8).init(test_allocator);
+    defer log_output.deinit();
+    
+    var logger = CompileTimeLogger.init(log_output.writer().any());
+    
+    // Test that compile-time redacted fields are filtered
+    logger.info("Security test", &.{
+        Field.string("username", "bob"),
+        Field.string("password", "compile_time_secret"), // Redacted at compile-time
+        Field.string("api_key", "ct_api_key_123"), // Redacted at compile-time
+        Field.string("email", "bob@example.com"), // Not redacted
+    });
+    
+    // Verify compile-time redaction worked
+    const output = log_output.items;
+    try testing.expect(std.mem.indexOf(u8, output, "bob") != null); // Username visible
+    try testing.expect(std.mem.indexOf(u8, output, "bob@example.com") != null); // Email visible
+    try testing.expect(std.mem.indexOf(u8, output, "compile_time_secret") == null); // Password hidden
+    try testing.expect(std.mem.indexOf(u8, output, "ct_api_key_123") == null); // API key hidden
+    try testing.expect(std.mem.indexOf(u8, output, "[REDACTED:string]") != null); // Redaction marker present
+}
+
+test "Hybrid redaction - compile-time + runtime" {
+    const test_allocator = testing.allocator;
+    
+    // Create runtime redaction config
+    var runtime_redaction = RedactionConfig.init(test_allocator);
+    defer runtime_redaction.deinit();
+    
+    try runtime_redaction.addKey("credit_card");
+    try runtime_redaction.addKey("ssn");
+    
+    // Create logger with both compile-time and runtime redaction
+    const HybridLogger = LoggerWithRedaction(.{}, .{
+        .redacted_fields = &.{ "password", "api_key" }, // Compile-time
+    });
+    
+    var log_output = std.ArrayList(u8).init(test_allocator);
+    defer log_output.deinit();
+    
+    var logger = HybridLogger.initWithRedaction(log_output.writer().any(), &runtime_redaction);
+    
+    // Test hybrid redaction
+    logger.info("Payment processing", &.{
+        Field.string("user_id", "USER-789"),
+        Field.string("password", "ct_redacted_pwd"), // Compile-time redacted
+        Field.string("credit_card", "4532-1234-5678-9012"), // Runtime redacted
+        Field.string("api_key", "ct_api_xyz"), // Compile-time redacted
+        Field.string("ssn", "987-65-4321"), // Runtime redacted
+        Field.string("email", "user@example.com"), // Not redacted
+    });
+    
+    // Verify hybrid redaction worked
+    const output = log_output.items;
+    try testing.expect(std.mem.indexOf(u8, output, "USER-789") != null); // User ID visible
+    try testing.expect(std.mem.indexOf(u8, output, "user@example.com") != null); // Email visible
+    
+    // Both compile-time and runtime redacted fields should be hidden
+    try testing.expect(std.mem.indexOf(u8, output, "ct_redacted_pwd") == null); // CT redacted
+    try testing.expect(std.mem.indexOf(u8, output, "4532-1234-5678-9012") == null); // RT redacted
+    try testing.expect(std.mem.indexOf(u8, output, "ct_api_xyz") == null); // CT redacted
+    try testing.expect(std.mem.indexOf(u8, output, "987-65-4321") == null); // RT redacted
+    
+    try testing.expect(std.mem.indexOf(u8, output, "[REDACTED:string]") != null); // Redaction markers
+}
+
+test "Convenience constructor for compile-time redaction" {
+    // Test the convenience constructor
+    const logger = loggerWithRedaction(.{
+        .redacted_fields = &.{ "token", "secret" },
+    });
+    
+    // This test just verifies the constructor works - actual functionality tested above
+    try testing.expect(@TypeOf(logger.writer) == std.io.AnyWriter);
+    try testing.expect(@intFromEnum(logger.level) <= @intFromEnum(Level.fatal));
 }

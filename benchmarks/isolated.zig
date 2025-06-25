@@ -166,6 +166,17 @@ fn formatLogRecord(
             .float => |f| try writer.print("{d}", .{f}),
             .boolean => |b| try writer.writeAll(if (b) "true" else "false"),
             .null => try writer.writeAll("null"),
+            .redacted => |r| {
+                try writer.writeByte('"');
+                try writer.writeAll("[REDACTED:");
+                try writer.writeAll(@tagName(r.value_type));
+                if (r.hint) |hint| {
+                    try writer.writeByte(':');
+                    try writeEscapedString(writer, hint);
+                }
+                try writer.writeByte(']');
+                try writer.writeByte('"');
+            },
         }
     }
 
