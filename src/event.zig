@@ -53,49 +53,32 @@ pub const LogEvent = struct {
         assert(event_result.timestamp_ms > 0);
         return event_result;
     }
-
-    pub fn initLegacy(
-        log_level: config.Level,
-        log_message: []const u8,
-        log_fields: []const field.Field,
-        task_context_id: u64,
-        span_context_id: ?u64,
-    ) LogEvent {
-        assert(@intFromEnum(log_level) <= @intFromEnum(config.Level.fatal));
-        assert(log_message.len > 0);
-        assert(log_message.len < 64 * 1024);
-        assert(log_fields.len <= 64);
-        assert(task_context_id >= 1);
-        assert(span_context_id == null or span_context_id.? >= 1);
-
-        const trace_id_expanded = trace_mod.expand_short_to_trace_id(task_context_id);
-        const parent_id_generated = trace_mod.generate_span_id();
-
-        var trace_id_hex_buf: [32]u8 = undefined;
-        var span_id_hex_buf: [16]u8 = undefined;
-
-        _ = trace_mod.bytes_to_hex_lowercase(&trace_id_expanded, &trace_id_hex_buf) catch @panic("hex conversion failed with correct buffer size");
-        _ = trace_mod.bytes_to_hex_lowercase(&parent_id_generated, &span_id_hex_buf) catch @panic("hex conversion failed with correct buffer size");
-
-        var parent_span_hex_opt: ?[16]u8 = null;
-        if (span_context_id) |sid| {
-            var span_bytes: [8]u8 = undefined;
-            std.mem.writeInt(u64, &span_bytes, sid, .big);
-            var parent_hex_buf: [16]u8 = undefined;
-            _ = trace_mod.bytes_to_hex_lowercase(&span_bytes, &parent_hex_buf) catch @panic("hex conversion failed with correct buffer size");
-            parent_span_hex_opt = parent_hex_buf;
-        }
-
-        const fake_trace_ctx = trace_mod.TraceContext{
-            .version = 0x00,
-            .trace_id = trace_id_expanded,
-            .parent_id = parent_id_generated,
-            .trace_flags = trace_mod.TraceFlags.sampled_only(false),
-            .trace_id_hex = trace_id_hex_buf,
-            .span_id_hex = span_id_hex_buf,
-            .parent_span_hex = parent_span_hex_opt,
-        };
-
-        return init(log_level, log_message, log_fields, fake_trace_ctx);
-    }
 };
+
+const testing = std.testing;
+
+test "LogEvent.init creates valid event" {
+    const trace_ctx = trace_mod.TraceContext.init(true);
+    const fields = [_]field.Field{
+        field.Field.string("key", "value"),
+        field.Field.int("count", 42),
+    };
+
+    const event = LogEvent.init(.info, "Test message", &fields, trace_ctx);
+
+    try testing.expectEqualStrings("Test message", event.message);
+    try testing.expect(event.fields.len == 2);
+    try testing.expect(event.sampled == true);
+    try testing.expect(event.timestamp_ms > 0);
+    try testing.expect(event.thread_id > 0);
+    try testing.expect(event.trace_id_hex.len == 32);
+    try testing.expect(event.span_id_hex.len == 16);
+}
+
+test "LogEvent level string formatting" {
+    const trace_ctx = trace_mod.TraceContext.init(false);
+    const event = LogEvent.init(.debug, "Debug test", &.{}, trace_ctx);
+
+    const level_str = std.mem.sliceTo(&event.level_str, ' ');
+    try testing.expectEqualStrings("DEBUG", level_str);
+}

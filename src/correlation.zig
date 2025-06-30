@@ -43,31 +43,6 @@ pub const Span = struct {
         return span_result;
     }
 
-    pub fn initLegacy(span_name: []const u8, parent_span_id: ?u64, task_context_id: u64) Span {
-        assert(span_name.len > 0);
-        assert(span_name.len < 256);
-        assert(task_context_id >= 1);
-        assert(parent_span_id == null or parent_span_id.? >= 1);
-
-        const trace_id_expanded = trace_mod.expand_short_to_trace_id(task_context_id);
-        const parent_id_bytes = trace_mod.generate_span_id();
-        const trace_ctx = trace_mod.TraceContext{
-            .version = 0x00,
-            .trace_id = trace_id_expanded,
-            .parent_id = parent_id_bytes,
-            .trace_flags = trace_mod.TraceFlags.sampled_only(false),
-        };
-
-        var parent_span_bytes: ?[8]u8 = null;
-        if (parent_span_id) |pid| {
-            var pb: [8]u8 = undefined;
-            std.mem.writeInt(u64, &pb, pid, .big);
-            parent_span_bytes = pb;
-        }
-
-        return init(span_name, parent_span_bytes, trace_ctx);
-    }
-
     pub fn getSpanIdBytes(self: *const Span) [8]u8 {
         return self.trace_context.parent_id;
     }
@@ -270,4 +245,144 @@ pub fn createChildTaskContext() TaskContext {
     assert(child_context.id >= 1);
     assert(child_context.parent_id.? == parent_context.id);
     return child_context;
+}
+
+const testing = std.testing;
+
+test "Span.init creates valid span" {
+    const trace_ctx = trace_mod.TraceContext.init(true);
+    const span = Span.init("test_span", null, trace_ctx);
+
+    try testing.expectEqualStrings("test_span", span.name);
+    try testing.expect(span.start_time > 0);
+    try testing.expect(span.thread_id > 0);
+    try testing.expect(span.id > 0);
+    try testing.expect(span.parent_id == null);
+    try testing.expect(span.task_id > 0);
+}
+
+test "Span.getSpanIdBytes returns correct bytes" {
+    const trace_ctx = trace_mod.TraceContext.init(false);
+    const span = Span.init("test", null, trace_ctx);
+    const span_bytes = span.getSpanIdBytes();
+
+    try testing.expect(span_bytes.len == 8);
+    try testing.expect(!trace_mod.is_all_zero_id(span_bytes[0..]));
+}
+
+test "TaskContext.init creates valid context" {
+    const context = TaskContext.init(null);
+
+    try testing.expect(context.id >= 1);
+    try testing.expect(context.parent_id == null);
+    try testing.expect(context.span_stack.len == 0);
+    try testing.expect(context.span_stack.capacity() == 32);
+}
+
+test "TaskContext.fromTraceContext creates valid context" {
+    const trace_ctx = trace_mod.TraceContext.init(true);
+    const context = TaskContext.fromTraceContext(trace_ctx);
+
+    try testing.expect(context.id >= 1);
+    try testing.expect(context.parent_id == null);
+    try testing.expect(context.span_stack.len == 0);
+}
+
+test "TaskContext span stack operations" {
+    var context = TaskContext.init(null);
+    const span_bytes = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 };
+
+    try testing.expect(context.currentSpan() == null);
+    try testing.expect(context.popSpan() == null);
+
+    try context.pushSpan(span_bytes);
+    try testing.expect(context.span_stack.len == 1);
+
+    const current = context.currentSpan().?;
+    try testing.expect(std.mem.eql(u8, &current, &span_bytes));
+
+    const popped = context.popSpan().?;
+    try testing.expect(std.mem.eql(u8, &popped, &span_bytes));
+    try testing.expect(context.span_stack.len == 0);
+}
+
+test "TaskContext legacy span operations" {
+    var context = TaskContext.init(null);
+    const span_id: u64 = 12345;
+
+    try context.pushSpanLegacy(span_id);
+    try testing.expect(context.span_stack.len == 1);
+
+    const current_legacy = context.currentSpanLegacy().?;
+    try testing.expect(current_legacy == span_id);
+
+    const popped_legacy = context.popSpanLegacy().?;
+    try testing.expect(popped_legacy == span_id);
+    try testing.expect(context.span_stack.len == 0);
+}
+
+test "TaskContext.createChildTraceContext" {
+    const context = TaskContext.init(null);
+    const child_trace = context.createChildTraceContext(true);
+
+    try testing.expect(std.mem.eql(u8, &child_trace.trace_id, &context.trace_context.trace_id));
+    try testing.expect(!std.mem.eql(u8, &child_trace.parent_id, &context.trace_context.parent_id));
+    try testing.expect(child_trace.trace_flags.sampled == true);
+}
+
+test "CorrelationContext.fromTraceContext" {
+    const trace_ctx = trace_mod.TraceContext.init(false);
+    const corr_ctx = CorrelationContext.fromTraceContext(trace_ctx, null, .info);
+
+    try testing.expect(corr_ctx.task_id >= 1);
+    try testing.expect(corr_ctx.span_id > 0);
+    try testing.expect(corr_ctx.thread_id > 0);
+    try testing.expect(corr_ctx.level == .info);
+}
+
+test "CorrelationContext.fromIds" {
+    const corr_ctx = CorrelationContext.fromIds(12345, 67890, .warn);
+
+    try testing.expect(corr_ctx.task_id == @as(u32, @truncate(12345)));
+    try testing.expect(corr_ctx.span_id == @as(u32, @truncate(67890)));
+    try testing.expect(corr_ctx.thread_id > 0);
+    try testing.expect(corr_ctx.level == .warn);
+}
+
+test "generate_task_id produces unique IDs" {
+    const id1 = generate_task_id();
+    const id2 = generate_task_id();
+
+    try testing.expect(id1 >= 1);
+    try testing.expect(id2 >= 1);
+    try testing.expect(id1 != id2);
+    try testing.expect(id2 > id1);
+}
+
+test "getCurrentTaskContext returns valid context" {
+    const context = getCurrentTaskContext();
+
+    try testing.expect(context.id >= 1);
+    try testing.expect(context.span_stack.capacity() == 32);
+}
+
+test "setTaskContext and getCurrentTaskContext" {
+    var custom_context = TaskContext.init(null);
+    const original_id = custom_context.id;
+
+    setTaskContext(&custom_context);
+    const retrieved_context = getCurrentTaskContext();
+
+    try testing.expect(retrieved_context.id == original_id);
+}
+
+test "createChildTaskContext creates child with parent reference" {
+    var parent_context = TaskContext.init(null);
+    setTaskContext(&parent_context);
+
+    const child_context = createChildTaskContext();
+
+    try testing.expect(child_context.id >= 1);
+    try testing.expect(child_context.parent_id.? == parent_context.id);
+    try testing.expect(child_context.id != parent_context.id);
 }
