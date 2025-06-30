@@ -2,7 +2,7 @@
     .fingerprint = 0x55b82e332fb709da,
     .name = .zlog,
     .version = "0.1.0",
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.14.1",
     .dependencies = .{
         .zbench = .{
             .url = "git+https://github.com/hendriknielaender/zBench#c64bb43a3e32c5c62c02058ad7247e072301708d",
