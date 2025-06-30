@@ -35,10 +35,10 @@ pub const LoggerWithRedaction = logger.LoggerWithRedaction;
 pub fn default() Logger(.{}) {
     const stderr_file = std.io.getStdErr();
     const stderr_any_writer = stderr_file.writer().any();
-    
+
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
-    
+
     const default_logger = Logger(.{}).init(stderr_any_writer);
     std.debug.assert(@intFromEnum(default_logger.level) <= @intFromEnum(Level.fatal));
     return default_logger;
@@ -47,12 +47,12 @@ pub fn default() Logger(.{}) {
 pub fn defaultAsync(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = true }) {
     const stderr_file = std.io.getStdErr();
     const stderr_any_writer = stderr_file.writer().any();
-    
+
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
     std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
     std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-    
+
     const async_logger_result = try Logger(.{ .async_mode = true }).initAsync(stderr_any_writer, event_loop_ptr, memory_allocator);
     std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
     return async_logger_result;
@@ -67,11 +67,11 @@ pub fn asyncLogger(comptime custom_config: Config, output_writer: std.io.AnyWrit
         std.debug.assert(custom_config.buffer_size >= 256);
         std.debug.assert(custom_config.async_queue_size > 0);
     }
-    
+
     std.debug.assert(@TypeOf(output_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
     std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-    
+
     const custom_async_logger = try Logger(custom_config).initAsync(output_writer, event_loop_ptr, memory_allocator);
     std.debug.assert(@intFromEnum(custom_async_logger.level) <= @intFromEnum(Level.fatal));
     return custom_async_logger;
@@ -80,10 +80,10 @@ pub fn asyncLogger(comptime custom_config: Config, output_writer: std.io.AnyWrit
 pub fn loggerWithRedaction(comptime redaction_options: RedactionOptions) LoggerWithRedaction(.{}, redaction_options) {
     const stderr_file = std.io.getStdErr();
     const stderr_any_writer = stderr_file.writer().any();
-    
+
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
-    
+
     const logger_result = LoggerWithRedaction(.{}, redaction_options).init(stderr_any_writer);
     std.debug.assert(@intFromEnum(logger_result.level) <= @intFromEnum(Level.fatal));
     return logger_result;
@@ -94,7 +94,7 @@ pub const generateSpanId = trace.generate_span_id;
 pub const isAllZeroId = trace.is_all_zero_id;
 pub const bytesToHex = trace.bytes_to_hex_lowercase;
 
-// For backward compatibility 
+// For backward compatibility
 pub const field = field_mod.Field;
 
 const testing = std.testing;
@@ -475,23 +475,23 @@ test "Default async logger creation" {
 
 test "RedactionConfig context pattern" {
     const test_allocator = testing.allocator;
-    
+
     var log_output = std.ArrayList(u8).init(test_allocator);
     defer log_output.deinit();
-    
+
     var redaction_cfg = RedactionConfig.init(test_allocator);
     defer redaction_cfg.deinit();
-    
+
     try redaction_cfg.addKey("password");
     try redaction_cfg.addKey("apiKey");
-    
+
     var log = Logger(.{}).initWithRedaction(log_output.writer().any(), &redaction_cfg);
-    
+
     log.info("User action", &.{
         Field.string("user", "alice"),
         Field.string("password", "super_secret"),
     });
-    
+
     try testing.expect(std.mem.indexOf(u8, log_output.items, "alice") != null);
     try testing.expect(std.mem.indexOf(u8, log_output.items, "super_secret") == null);
     try testing.expect(std.mem.indexOf(u8, log_output.items, "[REDACTED:string]") != null);
@@ -499,25 +499,25 @@ test "RedactionConfig context pattern" {
 
 test "Context-based redaction in action" {
     const test_allocator = testing.allocator;
-    
+
     var redaction_cfg = RedactionConfig.init(test_allocator);
     defer redaction_cfg.deinit();
-    
+
     try redaction_cfg.addKey("password");
     try redaction_cfg.addKey("api_key");
     try redaction_cfg.addKey("ssn");
-    
+
     var log_output = std.ArrayList(u8).init(test_allocator);
     defer log_output.deinit();
-    
+
     var log = Logger(.{}).initWithRedaction(log_output.writer().any(), &redaction_cfg);
-    
+
     log.info("User login", &.{
         Field.string("username", "alice"),
         Field.string("password", "secret123"),
         Field.string("ip", "192.168.1.1"),
     });
-    
+
     const output = log_output.items;
     try testing.expect(std.mem.indexOf(u8, output, "alice") != null);
     try testing.expect(std.mem.indexOf(u8, output, "192.168.1.1") != null);
@@ -527,23 +527,23 @@ test "Context-based redaction in action" {
 
 test "Compile-time redaction - zero cost filtering" {
     const test_allocator = testing.allocator;
-    
+
     const CompileTimeLogger = LoggerWithRedaction(.{}, .{
         .redacted_fields = &.{ "password", "api_key", "secret" },
     });
-    
+
     var log_output = std.ArrayList(u8).init(test_allocator);
     defer log_output.deinit();
-    
+
     var log = CompileTimeLogger.init(log_output.writer().any());
-    
+
     log.info("Security test", &.{
         Field.string("username", "bob"),
         Field.string("password", "compile_time_secret"),
         Field.string("api_key", "ct_api_key_123"),
         Field.string("email", "bob@example.com"),
     });
-    
+
     const output = log_output.items;
     try testing.expect(std.mem.indexOf(u8, output, "bob") != null);
     try testing.expect(std.mem.indexOf(u8, output, "bob@example.com") != null);
@@ -554,21 +554,21 @@ test "Compile-time redaction - zero cost filtering" {
 
 test "Hybrid redaction - compile-time + runtime" {
     const test_allocator = testing.allocator;
-    
+
     var runtime_redaction = RedactionConfig.init(test_allocator);
     defer runtime_redaction.deinit();
     try runtime_redaction.addKey("runtime_secret");
     try runtime_redaction.addKey("dynamic_key");
-    
+
     const HybridLogger = LoggerWithRedaction(.{}, .{
         .redacted_fields = &.{ "password", "api_key" },
     });
-    
+
     var log_output = std.ArrayList(u8).init(test_allocator);
     defer log_output.deinit();
-    
+
     var log = HybridLogger.initWithRedaction(log_output.writer().any(), &runtime_redaction);
-    
+
     log.info("Hybrid test", &.{
         Field.string("username", "charlie"),
         Field.string("password", "compile_time_filtered"),
@@ -577,7 +577,7 @@ test "Hybrid redaction - compile-time + runtime" {
         Field.string("dynamic_key", "runtime_dynamic"),
         Field.string("visible_field", "not_redacted"),
     });
-    
+
     const output = log_output.items;
     try testing.expect(std.mem.indexOf(u8, output, "charlie") != null);
     try testing.expect(std.mem.indexOf(u8, output, "not_redacted") != null);
@@ -589,26 +589,26 @@ test "Hybrid redaction - compile-time + runtime" {
 
 test "Convenience constructor for compile-time redaction" {
     const test_allocator = testing.allocator;
-    
+
     var output = std.ArrayList(u8).init(test_allocator);
     defer output.deinit();
-    
+
     const log_factory = loggerWithRedaction(.{
         .redacted_fields = &.{ "token", "auth_header" },
     });
     _ = log_factory;
-    
+
     var custom_log = LoggerWithRedaction(.{}, .{
         .redacted_fields = &.{ "token", "auth_header" },
     }).init(output.writer().any());
-    
+
     custom_log.info("Auth flow", &.{
         Field.string("user", "admin"),
         Field.string("token", "bearer_abc123"),
         Field.string("auth_header", "Basic dXNlcjpwYXNz"),
         Field.string("endpoint", "/api/login"),
     });
-    
+
     const result = output.items;
     try testing.expect(std.mem.indexOf(u8, result, "admin") != null);
     try testing.expect(std.mem.indexOf(u8, result, "/api/login") != null);
