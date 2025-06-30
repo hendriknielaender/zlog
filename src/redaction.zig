@@ -34,3 +34,56 @@ pub const RedactionConfig = struct {
         return @intCast(self.redacted_keys.count());
     }
 };
+
+const testing = std.testing;
+
+test "RedactionConfig init and deinit" {
+    var config = RedactionConfig.init(testing.allocator);
+    defer config.deinit();
+
+    try testing.expect(config.count() == 0);
+}
+
+test "RedactionConfig addKey and shouldRedact" {
+    var config = RedactionConfig.init(testing.allocator);
+    defer config.deinit();
+
+    try config.addKey("password");
+    try config.addKey("secret");
+
+    try testing.expect(config.shouldRedact("password"));
+    try testing.expect(config.shouldRedact("secret"));
+    try testing.expect(!config.shouldRedact("username"));
+    try testing.expect(config.count() == 2);
+}
+
+test "RedactionConfig multiple keys" {
+    var config = RedactionConfig.init(testing.allocator);
+    defer config.deinit();
+
+    const keys = [_][]const u8{ "api_key", "token", "auth", "credential" };
+    for (keys) |key| {
+        try config.addKey(key);
+    }
+
+    try testing.expect(config.count() == 4);
+    for (keys) |key| {
+        try testing.expect(config.shouldRedact(key));
+    }
+
+    try testing.expect(!config.shouldRedact("public_data"));
+}
+
+test "RedactionOptions default values" {
+    const options = RedactionOptions{};
+    try testing.expect(options.redacted_fields.len == 0);
+}
+
+test "RedactionOptions with fields" {
+    const options = RedactionOptions{
+        .redacted_fields = &.{ "password", "secret" },
+    };
+    try testing.expect(options.redacted_fields.len == 2);
+    try testing.expectEqualStrings("password", options.redacted_fields[0]);
+    try testing.expectEqualStrings("secret", options.redacted_fields[1]);
+}

@@ -212,3 +212,102 @@ pub fn bytes_to_hex_lowercase(bytes_input: []const u8, hexadecimal_buffer: []u8)
     assert(hex_result.len == bytes_input.len * 2);
     return hex_result;
 }
+
+const testing = std.testing;
+
+test "TraceFlags fromU8 and toU8 conversion" {
+    const flags_byte: u8 = 0b00000001;
+    const flags = TraceFlags.fromU8(flags_byte);
+    try testing.expect(flags.sampled == true);
+    try testing.expect(flags.toU8() == flags_byte);
+}
+
+test "TraceFlags sampled_only constructor" {
+    const sampled_flags = TraceFlags.sampled_only(true);
+    try testing.expect(sampled_flags.sampled == true);
+    try testing.expect(sampled_flags.reserved_1 == false);
+
+    const unsampled_flags = TraceFlags.sampled_only(false);
+    try testing.expect(unsampled_flags.sampled == false);
+}
+
+test "TraceContext init creates valid context" {
+    const ctx = TraceContext.init(true);
+    try testing.expect(ctx.version == 0x00);
+    try testing.expect(ctx.trace_flags.sampled == true);
+    try testing.expect(!is_all_zero_id(ctx.trace_id[0..]));
+    try testing.expect(!is_all_zero_id(ctx.parent_id[0..]));
+    try testing.expect(ctx.trace_id_hex.len == 32);
+    try testing.expect(ctx.span_id_hex.len == 16);
+    try testing.expect(ctx.parent_span_hex == null);
+}
+
+test "TraceContext createChild maintains trace_id" {
+    const parent_ctx = TraceContext.init(true);
+    const child_ctx = parent_ctx.createChild(false);
+
+    try testing.expect(std.mem.eql(u8, &child_ctx.trace_id, &parent_ctx.trace_id));
+    try testing.expect(!std.mem.eql(u8, &child_ctx.parent_id, &parent_ctx.parent_id));
+    try testing.expect(child_ctx.trace_flags.sampled == false);
+    try testing.expect(child_ctx.parent_span_hex != null);
+    try testing.expect(!is_all_zero_id(child_ctx.parent_id[0..]));
+}
+
+test "generate_trace_id produces valid IDs" {
+    const trace_id1 = generate_trace_id();
+    const trace_id2 = generate_trace_id();
+
+    try testing.expect(trace_id1.len == 16);
+    try testing.expect(trace_id2.len == 16);
+    try testing.expect(!is_all_zero_id(trace_id1[0..]));
+    try testing.expect(!is_all_zero_id(trace_id2[0..]));
+    try testing.expect(!std.mem.eql(u8, &trace_id1, &trace_id2));
+}
+
+test "generate_span_id produces valid IDs" {
+    const span_id1 = generate_span_id();
+    const span_id2 = generate_span_id();
+
+    try testing.expect(span_id1.len == 8);
+    try testing.expect(span_id2.len == 8);
+    try testing.expect(!is_all_zero_id(span_id1[0..]));
+    try testing.expect(!is_all_zero_id(span_id2[0..]));
+    try testing.expect(!std.mem.eql(u8, &span_id1, &span_id2));
+}
+
+test "expand_short_to_trace_id and extract_short_from_trace_id roundtrip" {
+    const short_id: u64 = 0x123456789ABCDEF0;
+    const expanded = expand_short_to_trace_id(short_id);
+    const extracted = extract_short_from_trace_id(expanded);
+
+    try testing.expect(extracted == short_id);
+    try testing.expect(expanded.len == 16);
+    try testing.expect(!is_all_zero_id(expanded[0..]));
+}
+
+test "should_sample_from_trace_id with different rates" {
+    const trace_id = generate_trace_id();
+
+    try testing.expect(should_sample_from_trace_id(trace_id, 0) == false);
+    try testing.expect(should_sample_from_trace_id(trace_id, 100) == true);
+
+    const sample_50 = should_sample_from_trace_id(trace_id, 50);
+    try testing.expect(@TypeOf(sample_50) == bool);
+}
+
+test "is_all_zero_id detects zero arrays" {
+    const zero_array = [_]u8{0} ** 16;
+    const non_zero_array = [_]u8{ 0, 0, 0, 1, 0, 0, 0, 0 };
+
+    try testing.expect(is_all_zero_id(zero_array[0..]));
+    try testing.expect(!is_all_zero_id(non_zero_array[0..]));
+}
+
+test "bytes_to_hex_lowercase conversion" {
+    const bytes = [_]u8{ 0x00, 0xFF, 0xAB, 0xCD };
+    var hex_buffer: [8]u8 = undefined;
+
+    const hex_result = try bytes_to_hex_lowercase(&bytes, &hex_buffer);
+    try testing.expectEqualStrings("00ffabcd", hex_result);
+    try testing.expect(hex_result.len == 8);
+}
