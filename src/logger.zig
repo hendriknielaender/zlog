@@ -8,6 +8,7 @@ const trace_mod = @import("trace.zig");
 
 const correlation = @import("correlation.zig");
 const redaction = @import("redaction.zig");
+const escape = @import("string_escape.zig");
 
 pub fn Logger(comptime cfg: config.Config) type {
     return LoggerWithRedaction(cfg, .{});
@@ -33,7 +34,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
         level: config.Level,
         redaction_config: ?*const redaction.RedactionConfig,
 
-        async_logger: if (async_mode) ?AsyncLogger else void = if (async_mode) null else {},
+        async_logger: if (async_mode) ?AsyncLogger(cfg) else void = if (async_mode) null else {},
 
         pub fn init(output_writer: std.io.AnyWriter) Self {
             return initWithRedaction(output_writer, null);
@@ -82,7 +83,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             assert(async_queue_size > 0);
             assert(buffer_size >= 256);
 
-            const async_logger_instance = try AsyncLogger.init(memory_allocator, output_writer, event_loop, async_queue_size, cfg.batch_size);
+            const async_logger_instance = try AsyncLogger(cfg).init(memory_allocator, output_writer, event_loop, async_queue_size, cfg.batch_size);
 
             const logger_result = Self{
                 .writer = output_writer,
@@ -302,7 +303,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 "{{\"level\":\"{s}\",\"msg\":\"",
                 .{level.string()},
             ) catch return;
-            write_escaped_string(writer, message) catch return;
+            escape.write(cfg, writer, message) catch return;
             writer.print(
                 "\",\"trace\":\"{s}\",\"span\":\"{s}\",\"ts\":{},\"tid\":{}",
                 .{ trace_ctx.trace_id_hex, trace_ctx.span_id_hex, std.time.milliTimestamp(), std.Thread.getCurrentId() },
@@ -310,7 +311,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
 
             for (fields) |field_item| {
                 writer.writeAll(",\"") catch return;
-                write_escaped_string(writer, field_item.key) catch return;
+                escape.write(cfg, writer, field_item.key) catch return;
                 writer.writeAll("\":") catch return;
 
                 if (self.shouldRedact(field_item.key)) {
@@ -328,7 +329,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                     switch (field_item.value) {
                         .string => |s| {
                             writer.writeByte('"') catch return;
-                            write_escaped_string(writer, s) catch return;
+                            escape.write(cfg, writer, s) catch return;
                             writer.writeByte('"') catch return;
                         },
                         .int => |i| writer.print("{}", .{i}) catch return,
@@ -358,327 +359,272 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
     };
 }
 
-pub const AsyncLogger = struct {
-    const Self = @This();
-    const BUFFER_SIZE = 1024;
-    const RING_SIZE = 1024;
-    const BATCH_SIZE = 32;
+pub fn AsyncLogger(comptime cfg: config.Config) type {
+    return struct {
+        const Self = @This();
+        const BUFFER_SIZE = 1024;
+        const RING_SIZE = 1024;
+        const BATCH_SIZE = 32;
 
-    const LogEntry = struct {
-        data: [BUFFER_SIZE]u8,
-        len: u32,
-        timestamp_ns: u64,
-    };
+        const LogEntry = struct {
+            data: [BUFFER_SIZE]u8,
+            len: u32,
+            timestamp_ns: u64,
+        };
 
-    const AsyncRingBuffer = struct {
-        entries: [RING_SIZE]LogEntry,
-        write_pos: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-        read_pos: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+        const AsyncRingBuffer = struct {
+            entries: [RING_SIZE]LogEntry,
+            write_pos: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+            read_pos: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-        fn tryPush(self: *@This(), entry: LogEntry) bool {
-            const current_write = self.write_pos.load(.acquire);
-            const current_read = self.read_pos.load(.acquire);
+            fn tryPush(self: *@This(), entry: LogEntry) bool {
+                const current_write = self.write_pos.load(.acquire);
+                const current_read = self.read_pos.load(.acquire);
 
-            if (current_write - current_read >= RING_SIZE) return false;
+                if (current_write - current_read >= RING_SIZE) return false;
 
-            self.entries[current_write & (RING_SIZE - 1)] = entry;
-            self.write_pos.store(current_write + 1, .release);
-            return true;
-        }
+                self.entries[current_write & (RING_SIZE - 1)] = entry;
+                self.write_pos.store(current_write + 1, .release);
+                return true;
+            }
 
-        fn tryPop(self: *@This()) ?LogEntry {
-            const current_read = self.read_pos.load(.acquire);
-            const current_write = self.write_pos.load(.acquire);
+            fn tryPop(self: *@This()) ?LogEntry {
+                const current_read = self.read_pos.load(.acquire);
+                const current_write = self.write_pos.load(.acquire);
 
-            if (current_read == current_write) return null;
+                if (current_read == current_write) return null;
 
-            const entry = self.entries[current_read & (RING_SIZE - 1)];
-            self.read_pos.store(current_read + 1, .release);
-            return entry;
-        }
+                const entry = self.entries[current_read & (RING_SIZE - 1)];
+                self.read_pos.store(current_read + 1, .release);
+                return entry;
+            }
 
-        fn isEmpty(self: *@This()) bool {
-            return self.read_pos.load(.acquire) == self.write_pos.load(.acquire);
-        }
-    };
+            fn isEmpty(self: *@This()) bool {
+                return self.read_pos.load(.acquire) == self.write_pos.load(.acquire);
+            }
+        };
 
-    allocator: std.mem.Allocator,
-    writer: std.io.AnyWriter,
-    loop: *xev.Loop,
-    ring_buffer: AsyncRingBuffer,
-
-    timer_completion: xev.Completion,
-    timer: xev.Timer,
-
-    shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    write_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-    batch_buffer: [BATCH_SIZE * BUFFER_SIZE]u8,
-
-    pub fn init(
         allocator: std.mem.Allocator,
         writer: std.io.AnyWriter,
         loop: *xev.Loop,
-        queue_size: u32,
-        batch_size: u32,
-    ) !Self {
-        _ = queue_size;
-        _ = batch_size;
+        ring_buffer: AsyncRingBuffer,
 
-        var self = Self{
-            .allocator = allocator,
-            .writer = writer,
-            .loop = loop,
-            .ring_buffer = AsyncRingBuffer{
-                // SAFETY: entries will be initialized in the loop below
-                .entries = undefined,
-            },
-            // SAFETY: timer_completion will be initialized by timer.run()
-            .timer_completion = undefined,
-            .timer = try xev.Timer.init(),
-            // SAFETY: batch_buffer is only used during processBatch() which writes before reading
-            .batch_buffer = undefined,
-        };
+        timer_completion: xev.Completion,
+        timer: xev.Timer,
 
-        for (&self.ring_buffer.entries) |*entry| {
-            entry.* = LogEntry{
-                // SAFETY: data is only read when len > 0, and len is initialized to 0
-                .data = undefined,
-                .len = 0,
-                .timestamp_ns = 0,
+        shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        write_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+        batch_buffer: [BATCH_SIZE * BUFFER_SIZE]u8,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            writer: std.io.AnyWriter,
+            loop: *xev.Loop,
+            queue_size: u32,
+            batch_size: u32,
+        ) !Self {
+            _ = queue_size;
+            _ = batch_size;
+
+            var self = Self{
+                .allocator = allocator,
+                .writer = writer,
+                .loop = loop,
+                .ring_buffer = AsyncRingBuffer{
+                    // SAFETY: entries will be initialized in the loop below
+                    .entries = undefined,
+                },
+                // SAFETY: timer_completion will be initialized by timer.run()
+                .timer_completion = undefined,
+                .timer = try xev.Timer.init(),
+                // SAFETY: batch_buffer is only used during processBatch() which writes before reading
+                .batch_buffer = undefined,
             };
+
+            for (&self.ring_buffer.entries) |*entry| {
+                entry.* = LogEntry{
+                    // SAFETY: data is only read when len > 0, and len is initialized to 0
+                    .data = undefined,
+                    .len = 0,
+                    .timestamp_ns = 0,
+                };
+            }
+
+            self.timer.run(
+                loop,
+                &self.timer_completion,
+                1_000_000,
+                Self,
+                &self,
+                Self.onTimer,
+            );
+
+            return self;
         }
 
-        self.timer.run(
-            loop,
-            &self.timer_completion,
-            1_000_000,
-            Self,
-            &self,
-            Self.onTimer,
-        );
+        pub fn deinit(self: *Self) void {
+            self.shutdown.store(true, .release);
 
-        return self;
-    }
+            self.flushPending();
 
-    pub fn deinit(self: *Self) void {
-        self.shutdown.store(true, .release);
-
-        self.flushPending();
-
-        self.timer.deinit();
-    }
-
-    pub fn logAsync(
-        self: *Self,
-        level: config.Level,
-        current_level: config.Level,
-        message: []const u8,
-        fields: []const field.Field,
-        trace_ctx: trace_mod.TraceContext,
-        max_fields: u16,
-    ) !void {
-        assert(@intFromEnum(level) <= @intFromEnum(config.Level.fatal));
-        assert(@intFromEnum(current_level) <= @intFromEnum(config.Level.fatal));
-        assert(fields.len <= max_fields);
-
-        if (@intFromEnum(level) < @intFromEnum(current_level)) return;
-
-        var format_buffer: [BUFFER_SIZE]u8 = undefined;
-        const formatted_len = self.formatEventOptimized(
-            level,
-            message,
-            fields[0..@min(fields.len, max_fields)],
-            trace_ctx,
-            &format_buffer,
-        ) catch return;
-
-        var entry = LogEntry{
-            // SAFETY: data will be filled by memcpy immediately after this initialization
-            .data = undefined,
-            .len = @intCast(formatted_len),
-            .timestamp_ns = @intCast(std.time.nanoTimestamp()),
-        };
-
-        @memcpy(entry.data[0..formatted_len], format_buffer[0..formatted_len]);
-
-        if (!self.ring_buffer.tryPush(entry)) {
-            return error.QueueFull;
+            self.timer.deinit();
         }
-    }
 
-    fn onTimer(
-        userdata: ?*Self,
-        loop: *xev.Loop,
-        c: *xev.Completion,
-        result: xev.Timer.RunError!void,
-    ) xev.CallbackAction {
-        _ = result catch return .disarm;
+        pub fn logAsync(
+            self: *Self,
+            level: config.Level,
+            current_level: config.Level,
+            message: []const u8,
+            fields: []const field.Field,
+            trace_ctx: trace_mod.TraceContext,
+            max_fields: u16,
+        ) !void {
+            assert(@intFromEnum(level) <= @intFromEnum(config.Level.fatal));
+            assert(@intFromEnum(current_level) <= @intFromEnum(config.Level.fatal));
+            assert(fields.len <= max_fields);
 
-        const self = userdata.?;
+            if (@intFromEnum(level) < @intFromEnum(current_level)) return;
 
-        if (self.shutdown.load(.acquire)) {
+            var format_buffer: [BUFFER_SIZE]u8 = undefined;
+            const formatted_len = self.formatEventOptimized(
+                level,
+                message,
+                fields[0..@min(fields.len, max_fields)],
+                trace_ctx,
+                &format_buffer,
+            ) catch return;
+
+            var entry = LogEntry{
+                // SAFETY: data will be filled by memcpy immediately after this initialization
+                .data = undefined,
+                .len = @intCast(formatted_len),
+                .timestamp_ns = @intCast(std.time.nanoTimestamp()),
+            };
+
+            @memcpy(entry.data[0..formatted_len], format_buffer[0..formatted_len]);
+
+            if (!self.ring_buffer.tryPush(entry)) {
+                return error.QueueFull;
+            }
+        }
+
+        fn onTimer(
+            userdata: ?*Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            result: xev.Timer.RunError!void,
+        ) xev.CallbackAction {
+            _ = result catch return .disarm;
+
+            const self = userdata.?;
+
+            if (self.shutdown.load(.acquire)) {
+                return .disarm;
+            }
+
+            if (!self.write_pending.load(.acquire)) {
+                self.processBatch();
+            }
+
+            self.timer.run(
+                loop,
+                c,
+                1_000_000,
+                Self,
+                self,
+                Self.onTimer,
+            );
+
             return .disarm;
         }
 
-        if (!self.write_pending.load(.acquire)) {
-            self.processBatch();
+        fn processBatch(self: *Self) void {
+            var batch_len: u32 = 0;
+            var entries_processed: u32 = 0;
+
+            while (entries_processed < BATCH_SIZE) {
+                const entry = self.ring_buffer.tryPop() orelse break;
+
+                if (batch_len + entry.len > self.batch_buffer.len) break;
+
+                @memcpy(
+                    self.batch_buffer[batch_len .. batch_len + entry.len],
+                    entry.data[0..entry.len],
+                );
+                batch_len += entry.len;
+                entries_processed += 1;
+            }
+
+            if (batch_len > 0) {
+                self.write_pending.store(true, .release);
+                _ = self.writer.write(self.batch_buffer[0..batch_len]) catch {};
+                self.write_pending.store(false, .release);
+            }
         }
 
-        self.timer.run(
-            loop,
-            c,
-            1_000_000,
-            Self,
-            self,
-            Self.onTimer,
-        );
+        pub fn flushPending(self: *Self) void {
+            while (!self.ring_buffer.isEmpty()) {
+                self.processBatch();
 
-        return .disarm;
-    }
+                while (self.write_pending.load(.acquire)) {
+                    std.Thread.yield() catch |err| std.debug.panic("Thread yield failed: {}", .{err});
+                }
+            }
+        }
 
-    fn processBatch(self: *Self) void {
-        var batch_len: u32 = 0;
-        var entries_processed: u32 = 0;
+        fn formatEventOptimized(
+            self: *Self,
+            level: config.Level,
+            message: []const u8,
+            fields: []const field.Field,
+            trace_ctx: trace_mod.TraceContext,
+            buffer: []u8,
+        ) !u32 {
+            _ = self;
+            assert(buffer.len >= 256);
 
-        while (entries_processed < BATCH_SIZE) {
-            const entry = self.ring_buffer.tryPop() orelse break;
+            var fbs = std.io.fixedBufferStream(buffer);
+            const writer = fbs.writer();
 
-            if (batch_len + entry.len > self.batch_buffer.len) break;
-
-            @memcpy(
-                self.batch_buffer[batch_len .. batch_len + entry.len],
-                entry.data[0..entry.len],
+            try writer.print(
+                "{{\"level\":\"{s}\",\"msg\":\"",
+                .{level.string()},
             );
-            batch_len += entry.len;
-            entries_processed += 1;
-        }
+            try escape.write(cfg, writer, message);
+            try writer.print(
+                "\",\"trace\":\"{s}\",\"span\":\"{s}\",\"ts\":{},\"tid\":{}",
+                .{ trace_ctx.trace_id_hex, trace_ctx.span_id_hex, std.time.milliTimestamp(), std.Thread.getCurrentId() },
+            );
 
-        if (batch_len > 0) {
-            self.write_pending.store(true, .release);
-            _ = self.writer.write(self.batch_buffer[0..batch_len]) catch {};
-            self.write_pending.store(false, .release);
-        }
-    }
-
-    pub fn flushPending(self: *Self) void {
-        while (!self.ring_buffer.isEmpty()) {
-            self.processBatch();
-
-            while (self.write_pending.load(.acquire)) {
-                std.Thread.yield() catch |err| std.debug.panic("Thread yield failed: {}", .{err});
-            }
-        }
-    }
-
-    fn formatEventOptimized(
-        self: *Self,
-        level: config.Level,
-        message: []const u8,
-        fields: []const field.Field,
-        trace_ctx: trace_mod.TraceContext,
-        buffer: []u8,
-    ) !u32 {
-        _ = self;
-        assert(buffer.len >= 256);
-
-        var fbs = std.io.fixedBufferStream(buffer);
-        const writer = fbs.writer();
-
-        try writer.print(
-            "{{\"level\":\"{s}\",\"msg\":\"",
-            .{level.string()},
-        );
-        try write_escaped_string(writer, message);
-        try writer.print(
-            "\",\"trace\":\"{s}\",\"span\":\"{s}\",\"ts\":{},\"tid\":{}",
-            .{ trace_ctx.trace_id_hex, trace_ctx.span_id_hex, std.time.milliTimestamp(), std.Thread.getCurrentId() },
-        );
-
-        for (fields) |field_item| {
-            try writer.writeAll(",\"");
-            try write_escaped_string(writer, field_item.key);
-            try writer.writeAll("\":");
-            switch (field_item.value) {
-                .string => |s| {
-                    try writer.writeByte('"');
-                    try write_escaped_string(writer, s);
-                    try writer.writeByte('"');
-                },
-                .int => |i| try writer.print("{}", .{i}),
-                .uint => |u| try writer.print("{}", .{u}),
-                .float => |f| try writer.print("{d:.5}", .{f}),
-                .boolean => |b| try writer.writeAll(if (b) "true" else "false"),
-                .null => try writer.writeAll("null"),
-                .redacted => |r| {
-                    if (r.hint) |hint| {
-                        try writer.print("\"[REDACTED:{s}:{s}]\"", .{ @tagName(r.value_type), hint });
-                    } else {
-                        try writer.print("\"[REDACTED:{s}]\"", .{@tagName(r.value_type)});
-                    }
-                },
-            }
-        }
-
-        try writer.writeAll("}\n");
-
-        return @intCast(fbs.getPos() catch 0);
-    }
-};
-
-pub fn write_escaped_string(output_writer: anytype, input_string: []const u8) !void {
-    assert(input_string.len < 1024 * 1024);
-    assert(@TypeOf(output_writer).Error != void);
-
-    var safe_batch_start: u32 = 0;
-
-    for (input_string, 0..) |current_char, char_index| {
-        if (characterNeedsEscaping(current_char)) {
-            if (char_index > safe_batch_start) {
-                try output_writer.writeAll(input_string[safe_batch_start..char_index]);
+            for (fields) |field_item| {
+                try writer.writeAll(",\"");
+                try escape.write(cfg, writer, field_item.key);
+                try writer.writeAll("\":");
+                switch (field_item.value) {
+                    .string => |s| {
+                        try writer.writeByte('"');
+                        try escape.write(cfg, writer, s);
+                        try writer.writeByte('"');
+                    },
+                    .int => |i| try writer.print("{}", .{i}),
+                    .uint => |u| try writer.print("{}", .{u}),
+                    .float => |f| try writer.print("{d:.5}", .{f}),
+                    .boolean => |b| try writer.writeAll(if (b) "true" else "false"),
+                    .null => try writer.writeAll("null"),
+                    .redacted => |r| {
+                        if (r.hint) |hint| {
+                            try writer.print("\"[REDACTED:{s}:{s}]\"", .{ @tagName(r.value_type), hint });
+                        } else {
+                            try writer.print("\"[REDACTED:{s}]\"", .{@tagName(r.value_type)});
+                        }
+                    },
+                }
             }
 
-            try writeEscapedCharacter(output_writer, current_char);
-            safe_batch_start = @intCast(char_index + 1);
+            try writer.writeAll("}\n");
+
+            return @intCast(fbs.getPos() catch 0);
         }
-    }
-
-    if (safe_batch_start < input_string.len) {
-        try output_writer.writeAll(input_string[safe_batch_start..]);
-        assert(safe_batch_start <= input_string.len);
-    }
-}
-
-inline fn characterNeedsEscaping(input_char: u8) bool {
-    assert(input_char <= 255);
-
-    const needs_escaping = switch (input_char) {
-        '"', '\\', '\n', '\r', '\t', 0x08, 0x0C => true,
-        else => input_char < 0x20,
     };
-
-    assert(@TypeOf(needs_escaping) == bool);
-    return needs_escaping;
-}
-
-inline fn writeEscapedCharacter(output_writer: anytype, input_char: u8) !void {
-    assert(input_char <= 255);
-    assert(@TypeOf(output_writer).Error != void);
-
-    switch (input_char) {
-        '"' => try output_writer.writeAll("\\\""),
-        '\\' => try output_writer.writeAll("\\\\"),
-        '\n' => try output_writer.writeAll("\\n"),
-        '\r' => try output_writer.writeAll("\\r"),
-        '\t' => try output_writer.writeAll("\\t"),
-        0x08 => try output_writer.writeAll("\\b"),
-        0x0C => try output_writer.writeAll("\\f"),
-        else => {
-            if (input_char < 0x20) {
-                try output_writer.print("\\u{x:0>4}", .{input_char});
-            } else {
-                try output_writer.writeByte(input_char);
-            }
-        },
-    }
 }
