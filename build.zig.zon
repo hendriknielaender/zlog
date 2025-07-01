@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x55b82e332fb709da,
     .name = .zlog,
-    .version = "0.1.0",
+    .version = "0.1.2",
     .minimum_zig_version = "0.14.1",
     .dependencies = .{
         .zbench = .{
