@@ -7,15 +7,15 @@ const backend_supports_vectors = switch (@import("builtin").zig_backend) {
     else => false,
 };
 
-pub fn writeEscapedString(comptime cfg: config.Config, writer: anytype, input: []const u8) !void {
+pub fn write(comptime cfg: config.Config, writer: anytype, input: []const u8) !void {
     if (comptime cfg.enable_simd and backend_supports_vectors) {
-        return writeEscapedStringSimd(writer, input);
+        return writeSimd(writer, input);
     } else {
-        return writeEscapedStringScalar(writer, input);
+        return writeScalar(writer, input);
     }
 }
 
-fn writeEscapedStringScalar(writer: anytype, input: []const u8) !void {
+fn writeScalar(writer: anytype, input: []const u8) !void {
     std.debug.assert(input.len < 1024 * 1024);
     std.debug.assert(@TypeOf(writer).Error != void);
 
@@ -38,7 +38,7 @@ fn writeEscapedStringScalar(writer: anytype, input: []const u8) !void {
     }
 }
 
-fn writeEscapedStringSimd(writer: anytype, input: []const u8) !void {
+fn writeSimd(writer: anytype, input: []const u8) !void {
     std.debug.assert(input.len < 1024 * 1024);
     std.debug.assert(@TypeOf(writer).Error != void);
 
@@ -103,7 +103,7 @@ fn writeEscapedStringSimd(writer: anytype, input: []const u8) !void {
             try writer.writeAll(input[safe_batch_start..]);
         }
     } else {
-        return writeEscapedStringScalar(writer, input);
+        return writeScalar(writer, input);
     }
 }
 
@@ -156,12 +156,12 @@ test "string escaping - basic strings without special characters" {
     for (test_cases) |test_case| {
         buffer.clearRetainingCapacity();
 
-        try writeEscapedStringScalar(buffer.writer(), test_case);
+        try writeScalar(buffer.writer(), test_case);
         const scalar_result = try buffer.toOwnedSlice();
         defer testing.allocator.free(scalar_result);
 
         buffer.clearRetainingCapacity();
-        try writeEscapedStringSimd(buffer.writer(), test_case);
+        try writeSimd(buffer.writer(), test_case);
         const simd_result = try buffer.toOwnedSlice();
         defer testing.allocator.free(simd_result);
 
@@ -192,12 +192,12 @@ test "string escaping - special characters" {
 
     for (test_cases) |test_case| {
         buffer.clearRetainingCapacity();
-        try writeEscapedStringScalar(buffer.writer(), test_case.input);
+        try writeScalar(buffer.writer(), test_case.input);
         const scalar_result = try buffer.toOwnedSlice();
         defer testing.allocator.free(scalar_result);
 
         buffer.clearRetainingCapacity();
-        try writeEscapedStringSimd(buffer.writer(), test_case.input);
+        try writeSimd(buffer.writer(), test_case.input);
         const simd_result = try buffer.toOwnedSlice();
         defer testing.allocator.free(simd_result);
 
@@ -226,12 +226,12 @@ test "string escaping - edge cases" {
 
     for (test_cases) |test_case| {
         buffer.clearRetainingCapacity();
-        try writeEscapedStringScalar(buffer.writer(), test_case.input);
+        try writeScalar(buffer.writer(), test_case.input);
         const scalar_result = try buffer.toOwnedSlice();
         defer testing.allocator.free(scalar_result);
 
         buffer.clearRetainingCapacity();
-        try writeEscapedStringSimd(buffer.writer(), test_case.input);
+        try writeSimd(buffer.writer(), test_case.input);
         const simd_result = try buffer.toOwnedSlice();
         defer testing.allocator.free(simd_result);
 
@@ -250,12 +250,12 @@ test "string escaping - long strings with mixed content" {
         "Adding more content here: \x01\x02\x03 control chars, more \"quotes\", and \r\n line endings.";
 
     buffer.clearRetainingCapacity();
-    try writeEscapedStringScalar(buffer.writer(), long_input);
+    try writeScalar(buffer.writer(), long_input);
     const scalar_result = try buffer.toOwnedSlice();
     defer testing.allocator.free(scalar_result);
 
     buffer.clearRetainingCapacity();
-    try writeEscapedStringSimd(buffer.writer(), long_input);
+    try writeSimd(buffer.writer(), long_input);
     const simd_result = try buffer.toOwnedSlice();
     defer testing.allocator.free(simd_result);
 
@@ -272,12 +272,12 @@ test "string escaping - config flag behavior" {
     const config_simd_disabled = config.Config{ .enable_simd = false };
 
     buffer.clearRetainingCapacity();
-    try writeEscapedString(config_simd_disabled, buffer.writer(), test_input);
+    try write(config_simd_disabled, buffer.writer(), test_input);
     const result_no_simd = try buffer.toOwnedSlice();
     defer testing.allocator.free(result_no_simd);
 
     buffer.clearRetainingCapacity();
-    try writeEscapedString(config_simd_enabled, buffer.writer(), test_input);
+    try write(config_simd_enabled, buffer.writer(), test_input);
     const result_with_simd = try buffer.toOwnedSlice();
     defer testing.allocator.free(result_with_simd);
 

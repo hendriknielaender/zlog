@@ -8,7 +8,7 @@ const trace_mod = @import("trace.zig");
 
 const correlation = @import("correlation.zig");
 const redaction = @import("redaction.zig");
-const string_escape = @import("string_escape.zig");
+const escape = @import("string_escape.zig");
 
 pub fn Logger(comptime cfg: config.Config) type {
     return LoggerWithRedaction(cfg, .{});
@@ -303,7 +303,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 "{{\"level\":\"{s}\",\"msg\":\"",
                 .{level.string()},
             ) catch return;
-            string_escape.writeEscapedString(cfg, writer, message) catch return;
+            escape.write(cfg, writer, message) catch return;
             writer.print(
                 "\",\"trace\":\"{s}\",\"span\":\"{s}\",\"ts\":{},\"tid\":{}",
                 .{ trace_ctx.trace_id_hex, trace_ctx.span_id_hex, std.time.milliTimestamp(), std.Thread.getCurrentId() },
@@ -311,7 +311,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
 
             for (fields) |field_item| {
                 writer.writeAll(",\"") catch return;
-                string_escape.writeEscapedString(cfg, writer, field_item.key) catch return;
+                escape.write(cfg, writer, field_item.key) catch return;
                 writer.writeAll("\":") catch return;
 
                 if (self.shouldRedact(field_item.key)) {
@@ -329,7 +329,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                     switch (field_item.value) {
                         .string => |s| {
                             writer.writeByte('"') catch return;
-                            string_escape.writeEscapedString(cfg, writer, s) catch return;
+                            escape.write(cfg, writer, s) catch return;
                             writer.writeByte('"') catch return;
                         },
                         .int => |i| writer.print("{}", .{i}) catch return,
@@ -591,7 +591,7 @@ pub fn AsyncLogger(comptime cfg: config.Config) type {
                 "{{\"level\":\"{s}\",\"msg\":\"",
                 .{level.string()},
             );
-            try string_escape.writeEscapedString(cfg, writer, message);
+            try escape.write(cfg, writer, message);
             try writer.print(
                 "\",\"trace\":\"{s}\",\"span\":\"{s}\",\"ts\":{},\"tid\":{}",
                 .{ trace_ctx.trace_id_hex, trace_ctx.span_id_hex, std.time.milliTimestamp(), std.Thread.getCurrentId() },
@@ -599,12 +599,12 @@ pub fn AsyncLogger(comptime cfg: config.Config) type {
 
             for (fields) |field_item| {
                 try writer.writeAll(",\"");
-                try string_escape.writeEscapedString(cfg, writer, field_item.key);
+                try escape.write(cfg, writer, field_item.key);
                 try writer.writeAll("\":");
                 switch (field_item.value) {
                     .string => |s| {
                         try writer.writeByte('"');
-                        try string_escape.writeEscapedString(cfg, writer, s);
+                        try escape.write(cfg, writer, s);
                         try writer.writeByte('"');
                     },
                     .int => |i| try writer.print("{}", .{i}),
