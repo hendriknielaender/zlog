@@ -146,7 +146,6 @@ var sync_logger = zlog.Logger(.{}).init(writer);
 zlog uses anonymous structs exclusively for clean, type-safe logging:
 
 ```zig
-```zig
 // Type inference handles everything at compile time
 logger.info("User login", .{
     .user_id = "12345",           // string
@@ -162,7 +161,6 @@ logger.info("User login", .{
 logger.debug("Debug info", .{ .component = "auth", .step = 1 });
 logger.warn("Warning", .{ .threshold = 0.8, .current = 0.95 });
 logger.err("Error", .{ .code = 500, .message = "Internal error" });
-```
 ```
 
 ## Field Redaction
@@ -429,62 +427,6 @@ try loop.run(.no_wait);
 
 - **Managed (Recommended)**: Use `initAsync()` - zlog handles everything
 - **Custom (Advanced)**: Use `initAsyncWithEventLoop()` - you control the loop
-
-The managed approach is recommended for most users as it provides the cleanest API.
-
-## Contributing
-
-We welcome contributions that maintain our safety and performance standards:
-
-1. **Follow TigerStyle** - All code must comply with TigerBeetle guidelines
-2. **Add comprehensive tests** - Both positive and negative test cases
-3. **Include benchmarks** - Performance impact must be measured
-4. **Zero regressions** - Existing functionality must not be degraded
-
-Read our [contributing guide](CONTRIBUTING.md) for detailed development process.
-
-## Building & Development
-
-```bash
-# Build library
-zig build
-
-# Run all tests
-zig build test
-
-# Run all benchmarks
-zig build benchmarks
-
-# Run examples
-zig build examples
-
-# Generate documentation
-zig build docs
-
-# Format code
-zig fmt src/ benchmarks/ examples/
-```
-
-### Project Structure
-
-```
-src/
-├── zlog.zig              # Main library interface
-├── logger.zig            # Core logging implementation
-├── otel_logger.zig       # OpenTelemetry-compliant logger
-├── otel.zig              # OTel data structures
-├── otlp_exporter.zig     # OTLP export functionality
-├── semantic_conventions.zig # OTel semantic conventions
-├── field.zig             # Field type definitions
-├── trace.zig             # Distributed tracing support
-├── correlation.zig       # Span and task correlation
-├── redaction.zig         # Field redaction system
-├── config.zig            # Configuration types
-└── string_escape.zig     # JSON string escaping
-
-benchmarks/               # Performance benchmarks
-examples/                 # Usage examples
-```
 
 ## License
 
