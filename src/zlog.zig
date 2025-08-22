@@ -8,6 +8,11 @@ pub const correlation = @import("correlation.zig");
 pub const redaction = @import("redaction.zig");
 pub const event = @import("event.zig");
 pub const logger = @import("logger.zig");
+pub const otel = @import("otel.zig");
+pub const EventLoop = @import("event_loop.zig").EventLoop;
+pub const otel_logger = @import("otel_logger.zig");
+pub const otlp_exporter = @import("otlp_exporter.zig");
+pub const semantic_conventions = @import("semantic_conventions.zig");
 
 pub const Config = config.Config;
 pub const Level = config.Level;
@@ -32,19 +37,35 @@ pub const LogEvent = event.LogEvent;
 pub const Logger = logger.Logger;
 pub const LoggerWithRedaction = logger.LoggerWithRedaction;
 
-pub fn default() Logger(.{}) {
+// OpenTelemetry support
+pub const OTelConfig = otel.OTelConfig;
+pub const OTelLogger = otel_logger.OTelLogger;
+pub const OTelLoggerWithRedaction = otel_logger.OTelLoggerWithRedaction;
+pub const Resource = otel.Resource;
+pub const InstrumentationScope = otel.InstrumentationScope;
+pub const LogRecord = otel.LogRecord;
+pub const SeverityNumber = otel.SeverityNumber;
+pub const OTLPExporter = otlp_exporter.OTLPExporter;
+pub const SemanticConventions = semantic_conventions.SemanticConventions;
+pub const SemConv = semantic_conventions.OTel;
+pub const CommonFields = semantic_conventions.CommonFields;
+
+/// Create default async logger with managed event loop
+pub fn default(memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = true }) {
     const stderr_file = std.io.getStdErr();
     const stderr_any_writer = stderr_file.writer().any();
 
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
+    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
 
-    const default_logger = Logger(.{}).init(stderr_any_writer);
-    std.debug.assert(@intFromEnum(default_logger.level) <= @intFromEnum(Level.fatal));
-    return default_logger;
+    const async_logger_result = try Logger(.{ .async_mode = true }).initAsync(stderr_any_writer, memory_allocator);
+    std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
+    return async_logger_result;
 }
 
-pub fn defaultAsync(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = true }) {
+/// Create default async logger with custom event loop (advanced usage)
+pub fn defaultWithEventLoop(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = true }) {
     const stderr_file = std.io.getStdErr();
     const stderr_any_writer = stderr_file.writer().any();
 
@@ -53,28 +74,58 @@ pub fn defaultAsync(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocat
     std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
     std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
 
-    const async_logger_result = try Logger(.{ .async_mode = true }).initAsync(stderr_any_writer, event_loop_ptr, memory_allocator);
+    const async_logger_result = try Logger(.{ .async_mode = true }).initAsyncWithEventLoop(stderr_any_writer, event_loop_ptr, memory_allocator);
     std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
     return async_logger_result;
 }
 
-pub fn asyncLogger(comptime custom_config: Config, output_writer: std.io.AnyWriter, event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !Logger(custom_config) {
+/// Create logger with custom configuration using managed event loop
+pub fn loggerWithConfig(comptime custom_config: Config, output_writer: std.io.AnyWriter, memory_allocator: std.mem.Allocator) !Logger(custom_config) {
     comptime {
-        if (!custom_config.async_mode) {
-            @compileError("asyncLogger() requires async_mode = true in config");
-        }
         std.debug.assert(custom_config.max_fields > 0);
         std.debug.assert(custom_config.buffer_size >= 256);
-        std.debug.assert(custom_config.async_queue_size > 0);
+        if (custom_config.async_mode) {
+            std.debug.assert(custom_config.async_queue_size > 0);
+        }
+    }
+
+    std.debug.assert(@TypeOf(output_writer) == std.io.AnyWriter);
+    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
+
+    if (custom_config.async_mode) {
+        const async_logger_result = try Logger(custom_config).initAsync(output_writer, memory_allocator);
+        std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
+        return async_logger_result;
+    } else {
+        const sync_logger_result = Logger(custom_config).init(output_writer);
+        std.debug.assert(@intFromEnum(sync_logger_result.level) <= @intFromEnum(Level.fatal));
+        return sync_logger_result;
+    }
+}
+
+/// Create logger with custom configuration using external event loop (advanced usage)
+pub fn loggerWithConfigAndEventLoop(comptime custom_config: Config, output_writer: std.io.AnyWriter, event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !Logger(custom_config) {
+    comptime {
+        std.debug.assert(custom_config.max_fields > 0);
+        std.debug.assert(custom_config.buffer_size >= 256);
+        if (custom_config.async_mode) {
+            std.debug.assert(custom_config.async_queue_size > 0);
+        }
     }
 
     std.debug.assert(@TypeOf(output_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
     std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
 
-    const custom_async_logger = try Logger(custom_config).initAsync(output_writer, event_loop_ptr, memory_allocator);
-    std.debug.assert(@intFromEnum(custom_async_logger.level) <= @intFromEnum(Level.fatal));
-    return custom_async_logger;
+    if (custom_config.async_mode) {
+        const async_logger_result = try Logger(custom_config).initAsyncWithEventLoop(output_writer, event_loop_ptr, memory_allocator);
+        std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
+        return async_logger_result;
+    } else {
+        const sync_logger_result = Logger(custom_config).init(output_writer);
+        std.debug.assert(@intFromEnum(sync_logger_result.level) <= @intFromEnum(Level.fatal));
+        return sync_logger_result;
+    }
 }
 
 pub fn loggerWithRedaction(comptime redaction_options: RedactionOptions) LoggerWithRedaction(.{}, redaction_options) {
@@ -87,6 +138,53 @@ pub fn loggerWithRedaction(comptime redaction_options: RedactionOptions) LoggerW
     const logger_result = LoggerWithRedaction(.{}, redaction_options).init(stderr_any_writer);
     std.debug.assert(@intFromEnum(logger_result.level) <= @intFromEnum(Level.fatal));
     return logger_result;
+}
+
+/// Create an OpenTelemetry-compliant logger with managed event loop (async only)
+pub fn otelLogger(memory_allocator: std.mem.Allocator) !OTelLogger(.{ .base_config = .{ .async_mode = true } }) {
+    const stderr_file = std.io.getStdErr();
+    const stderr_any_writer = stderr_file.writer().any();
+
+    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
+    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
+    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
+
+    const async_logger_result = try OTelLogger(.{ .base_config = .{ .async_mode = true } }).initAsync(stderr_any_writer, memory_allocator);
+    return async_logger_result;
+}
+
+/// Create an OpenTelemetry-compliant logger with custom event loop (async only)
+pub fn otelLoggerWithEventLoop(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !OTelLogger(.{ .base_config = .{ .async_mode = true } }) {
+    const stderr_file = std.io.getStdErr();
+    const stderr_any_writer = stderr_file.writer().any();
+
+    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
+    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
+    std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
+    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
+
+    const async_logger_result = try OTelLogger(.{ .base_config = .{ .async_mode = true } }).initAsyncWithEventLoop(stderr_any_writer, event_loop_ptr, memory_allocator);
+    return async_logger_result;
+}
+
+/// Create an OpenTelemetry-compliant logger with custom configuration (async only)
+pub fn otelLoggerWithConfig(comptime otel_config: OTelConfig, event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !OTelLogger(otel_config) {
+    comptime {
+        if (!otel_config.base_config.async_mode) {
+            @compileError("otelLoggerWithConfig() requires async_mode = true in config. Async is the only supported mode for the ergonomic API.");
+        }
+    }
+
+    const stderr_file = std.io.getStdErr();
+    const stderr_any_writer = stderr_file.writer().any();
+
+    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
+    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
+    std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
+    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
+
+    const async_logger_result = try OTelLogger(otel_config).initAsync(stderr_any_writer, event_loop_ptr, memory_allocator);
+    return async_logger_result;
 }
 
 pub const generateTraceId = trace.generate_trace_id;
@@ -303,8 +401,12 @@ test "Unicode characters" {
 }
 
 test "Default logger creation" {
-    const log = default();
-    _ = log;
+    const test_allocator = testing.allocator;
+    // Event loop now managed internally
+    // Loop deinit handled by logger
+
+    var log = try default(test_allocator);
+    defer log.deinitWithAllocator(test_allocator);
 }
 
 test "Custom configuration" {
@@ -349,27 +451,24 @@ test "Field convenience functions" {
 
 test "Async logger creation and basic functionality" {
     const test_allocator = testing.allocator;
-    var loop = try xev.Loop.init(.{});
-    defer loop.deinit();
 
     var buffer = std.ArrayList(u8).init(test_allocator);
     defer buffer.deinit();
 
     var async_log = try Logger(.{ .async_mode = true }).initAsync(
         buffer.writer().any(),
-        &loop,
         test_allocator,
     );
-    defer async_log.deinit();
+    defer async_log.deinitWithAllocator(test_allocator);
 
     async_log.info("Async test message", &.{
         Field.string("type", "async"),
         Field.int("count", 1),
     });
 
-    // Process messages by running the event loop
+    // Process messages by running the managed event loop
     for (0..5) |_| {
-        try loop.run(.no_wait);
+        try async_log.runEventLoop();
         std.time.sleep(5 * std.time.ns_per_ms);
     }
 
@@ -382,18 +481,15 @@ test "Async logger creation and basic functionality" {
 
 test "Async logger with high volume" {
     const test_allocator = testing.allocator;
-    var loop = try xev.Loop.init(.{});
-    defer loop.deinit();
 
     var buffer = std.ArrayList(u8).init(test_allocator);
     defer buffer.deinit();
 
     var async_log = try Logger(.{ .async_mode = true }).initAsync(
         buffer.writer().any(),
-        &loop,
         test_allocator,
     );
-    defer async_log.deinit();
+    defer async_log.deinitWithAllocator(test_allocator);
 
     for (0..10) |i| {
         async_log.info("Bulk message", &.{
@@ -402,9 +498,9 @@ test "Async logger with high volume" {
         });
     }
 
-    // Process messages by running the event loop
+    // Process messages by running the managed event loop
     for (0..5) |_| {
-        try loop.run(.no_wait);
+        try async_log.runEventLoop();
         std.time.sleep(5 * std.time.ns_per_ms);
     }
 
@@ -430,8 +526,8 @@ test "LogEvent creation" {
 
 test "Async mode configuration validation" {
     const test_allocator = testing.allocator;
-    var loop = try xev.Loop.init(.{});
-    defer loop.deinit();
+    // Event loop now managed internally
+    // Loop deinit handled by logger
 
     var buffer = std.ArrayList(u8).init(test_allocator);
     defer buffer.deinit();
@@ -444,30 +540,30 @@ test "Async mode configuration validation" {
 
     var async_log = try Logger(async_config).initAsync(
         buffer.writer().any(),
-        &loop,
+
         test_allocator,
     );
-    defer async_log.deinit();
+    defer async_log.deinitWithAllocator(test_allocator);
 
     try testing.expect(async_log.async_logger != null);
 }
 
 test "Default async logger creation" {
     const test_allocator = testing.allocator;
-    var loop = try xev.Loop.init(.{});
-    defer loop.deinit();
+    // Event loop now managed internally
+    // Loop deinit handled by logger
 
-    var async_log = try defaultAsync(&loop, test_allocator);
-    defer async_log.deinit();
+    var async_log = try default(test_allocator);
+    async_log.deinitWithAllocator(test_allocator); // Clean up first logger
 
     var buffer = std.ArrayList(u8).init(test_allocator);
     defer buffer.deinit();
 
     async_log = try Logger(.{ .async_mode = true }).initAsync(
         buffer.writer().any(),
-        &loop,
         test_allocator,
     );
+    defer async_log.deinitWithAllocator(test_allocator);
 
     async_log.info("Default async test", &.{});
     async_log.async_logger.?.flushPending();

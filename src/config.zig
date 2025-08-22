@@ -10,6 +10,7 @@ pub const Level = enum(u8) {
 
     pub fn string(self: Level) []const u8 {
         std.debug.assert(@intFromEnum(self) <= @intFromEnum(Level.fatal));
+
         const level_string = switch (self) {
             .trace => "TRACE",
             .debug => "DEBUG",
@@ -18,6 +19,7 @@ pub const Level = enum(u8) {
             .err => "ERROR",
             .fatal => "FATAL",
         };
+
         std.debug.assert(level_string.len > 0);
         std.debug.assert(level_string.len <= 6);
         return level_string;
@@ -25,6 +27,7 @@ pub const Level = enum(u8) {
 
     pub fn json_string(self: Level) []const u8 {
         std.debug.assert(@intFromEnum(self) <= @intFromEnum(Level.fatal));
+
         const json_level_string = switch (self) {
             .trace => "Trace",
             .debug => "Debug",
@@ -33,6 +36,7 @@ pub const Level = enum(u8) {
             .err => "Error",
             .fatal => "Fatal",
         };
+
         std.debug.assert(json_level_string.len > 0);
         std.debug.assert(json_level_string.len <= 5);
         return json_level_string;
@@ -43,7 +47,7 @@ pub const Config = struct {
     level: Level = .info,
     max_fields: u16 = 32,
     buffer_size: u32 = 4096,
-    async_mode: bool = false,
+    async_mode: bool = false, // Keep sync as default for backward compatibility
     async_queue_size: u32 = 65536,
     batch_size: u32 = 256,
     enable_logging: bool = true,

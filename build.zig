@@ -1,5 +1,4 @@
 const std = @import("std");
-const log = std.log.scoped(.zlog_build);
 
 const version = std.SemanticVersion{ .major = 0, .minor = 1, .patch = 2 };
 
@@ -16,6 +15,7 @@ pub fn build(b: *std.Build) void {
     // Setup other components only when requested
     setupTesting(b, target, optimize, deps);
     setupBenchmarks(b, target, optimize, deps);
+    setupExamples(b, target, optimize, deps);
     setupDocumentation(b, lib_step.lib);
 }
 
@@ -100,6 +100,7 @@ fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, _: std.built
         "memory",
         "production",
         "redaction",
+        "ergonomic_otel",
     };
 
     // Create module for benchmarks to import
@@ -132,6 +133,33 @@ fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, _: std.built
     }
 }
 
+fn setupExamples(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, deps: Dependencies) void {
+    const examples_step = b.step("examples", "Run all examples");
+
+    // Create module for examples to import
+    const zlog_example_module = b.addModule("zlog", .{
+        .root_source_file = b.path("src/zlog.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zlog_example_module.addImport("xev", deps.libxev_module);
+
+    // OTel example
+    const otel_example = b.addExecutable(.{
+        .name = "otel_example",
+        .root_source_file = b.path("examples/otel_example.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    otel_example.root_module.addImport("zlog", zlog_example_module);
+    otel_example.root_module.addImport("xev", deps.libxev_module);
+
+    const run_otel_example = b.addRunArtifact(otel_example);
+    const otel_step = b.step("example-otel", "Run OpenTelemetry example");
+    otel_step.dependOn(&run_otel_example.step);
+    examples_step.dependOn(&run_otel_example.step);
+}
+
 fn setupDocumentation(b: *std.Build, lib: *std.Build.Step.Compile) void {
     const install_docs = b.addInstallDirectory(.{
         .source_dir = lib.getEmittedDocs(),
@@ -141,6 +169,4 @@ fn setupDocumentation(b: *std.Build, lib: *std.Build.Step.Compile) void {
 
     const docs_step = b.step("docs", "Generate and install documentation");
     docs_step.dependOn(&install_docs.step);
-
-    // log.info("Documentation setup complete", .{});
 }

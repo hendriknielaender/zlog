@@ -21,7 +21,7 @@ const NullWriter = struct {
 };
 
 fn benchZlogNoAllocations(allocator: std.mem.Allocator) void {
-    _ = allocator; // zlog shouldn't use the allocator
+    _ = allocator;
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
@@ -35,7 +35,7 @@ fn benchZlogNoAllocations(allocator: std.mem.Allocator) void {
 }
 
 fn benchZlogWithTracking(allocator: std.mem.Allocator) void {
-    _ = allocator; // zlog shouldn't use the allocator
+    _ = allocator;
     var null_writer = NullWriter{};
     var logger = zlog.Logger(.{}).init(null_writer.writer().any());
 
@@ -53,10 +53,15 @@ fn benchStdFormatWithAllocations(allocator: std.mem.Allocator) void {
 
     for (0..1000) |i| {
         // This simulates a typical logging approach that allocates
-        const formatted = std.fmt.allocPrint(allocator, "{{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":{d}}}\n", .{i}) catch @panic("OOM");
-        defer allocator.free(formatted);
+        var list = std.ArrayList(u8).init(allocator);
+        defer list.deinit();
 
-        _ = null_writer.writer().write(formatted) catch {};
+        const writer = list.writer();
+        writer.writeAll("{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":") catch @panic("Write error");
+        writer.print("{d}", .{i}) catch @panic("Write error");
+        writer.writeAll("}\n") catch @panic("Write error");
+
+        _ = null_writer.writer().write(list.items) catch {};
     }
 }
 
@@ -69,19 +74,26 @@ fn benchArrayListLogging(allocator: std.mem.Allocator) void {
         defer list.deinit();
 
         const writer = list.writer();
-        std.fmt.format(writer, "{{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":{d}}}\n", .{i}) catch @panic("Format error");
+        writer.writeAll("{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":") catch @panic("Write error");
+        writer.print("{d}", .{i}) catch @panic("Write error");
+        writer.writeAll("}\n") catch @panic("Write error");
 
         _ = null_writer.writer().write(list.items) catch {};
     }
 }
 
 fn benchReusedBuffer(allocator: std.mem.Allocator) void {
-    _ = allocator; // This approach doesn't allocate per message
+    _ = allocator;
     var null_writer = NullWriter{};
     var buffer: [1024]u8 = undefined;
 
     for (0..1000) |i| {
-        const formatted = std.fmt.bufPrint(&buffer, "{{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":{d}}}\n", .{i}) catch @panic("Buffer too small");
+        var stream = std.io.fixedBufferStream(&buffer);
+        const writer = stream.writer();
+        writer.writeAll("{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":") catch @panic("Write error");
+        writer.print("{d}", .{i}) catch @panic("Write error");
+        writer.writeAll("}\n") catch @panic("Write error");
+        const formatted = stream.getWritten();
 
         _ = null_writer.writer().write(formatted) catch {};
     }

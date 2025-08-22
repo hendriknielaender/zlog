@@ -1,6 +1,5 @@
 const std = @import("std");
 const zlog = @import("zlog");
-const xev = @import("xev");
 
 // Production-like writer that simulates realistic I/O patterns
 const ProductionWriter = struct {
@@ -267,14 +266,12 @@ pub fn main() !void {
 
         // Async benchmark
         var async_writer = ProductionWriter.init(scenario.write_latency_ns, scenario.failure_rate);
-        var loop = try xev.Loop.init(.{});
-        defer loop.deinit();
 
         var async_logger = try zlog.Logger(.{
             .async_mode = true,
             .async_queue_size = 8192,
-        }).initAsync(async_writer.writer().any(), &loop, allocator);
-        defer async_logger.deinit();
+        }).initAsync(async_writer.writer().any(), allocator);
+        defer async_logger.deinitWithAllocator(allocator);
 
         var async_workload = WorkloadSimulator.init(allocator, request_count, concurrent_requests, error_rate);
 

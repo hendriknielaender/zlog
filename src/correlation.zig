@@ -121,7 +121,7 @@ pub const TaskContext = struct {
         if (self.span_stack.len == 0) return null;
 
         const initial_stack_len = self.span_stack.len;
-        const popped_span_bytes = self.span_stack.pop();
+        const popped_span_bytes = self.span_stack.pop().?;
 
         assert(self.span_stack.len == initial_stack_len - 1);
         assert(!trace_mod.is_all_zero_id(popped_span_bytes[0..]));

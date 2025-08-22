@@ -7,7 +7,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md)
 <img src="logo.png" alt="zlog logo" align="right" width="20%"/>
 
-zlog is a high-performance, extensible logging library for Zig, designed to offer both simplicity and power in logging for system-level applications. Inspired by the best features of modern loggers and tailored for the Zig ecosystem, `zlog` brings structured, efficient, and flexible logging to your development toolkit.
+zlog is a high-performance, zero-allocation structured logging library for Zig with full OpenTelemetry support. Designed for system-level applications requiring maximum performance and observability, zlog provides clean anonymous struct logging with comprehensive tracing capabilities.
 
 ---
 
@@ -30,7 +30,7 @@ zlog is a high-performance, extensible logging library for Zig, designed to offe
 }
 ```
 
-> **Note**: libxev is automatically included as a peer dependency of zlog for async logging support.
+> **Note**: libxev is automatically included as a dependency of zlog and managed internally. No need to import or manage event loops manually.
 
 2. Configure in `build.zig`:
 
@@ -46,23 +46,33 @@ const std = @import("std");
 const zlog = @import("zlog");
 
 pub fn main() !void {
-    // High-performance sync logger
-    var logger = zlog.default();
+    // High-performance async logger with managed event loop
+    var logger = try zlog.default(std.heap.page_allocator);
+    defer logger.deinitWithAllocator(std.heap.page_allocator);
     
-    // Simple logging with trace context
+    // Clean, ergonomic logging with anonymous structs
+    logger.info("Service started", .{
+        .version = "1.0.0",
+        .port = 8080,
+    });
+    
+    // Type inference handles everything at compile time
+    logger.info("User action", .{
+        .user = "alice",
+        .user_id = 12345,
+        .success = true,
+        .duration_ms = 45.7,
+    });
+    
+    // With trace context for distributed tracing
     const trace_ctx = zlog.TraceContext.init(true);
-    logger.infoWithTrace("Service started", trace_ctx, &.{
-        zlog.field.string("version", "1.0.0"),
-        zlog.field.uint("port", 8080),
+    logger.infoWithTrace("Request processed", trace_ctx, .{
+        .endpoint = "/api/users",
+        .status_code = 200,
     });
-    
-    // Different field types
-    logger.info("User action", &.{
-        zlog.field.string("user", "alice"),
-        zlog.field.uint("user_id", 12345),
-        zlog.field.boolean("success", true),
-        zlog.field.float("duration_ms", 45.7),
-    });
+
+    // Process async events (when using async logger)
+    try logger.runEventLoop();
 }
 ```
 
@@ -73,17 +83,12 @@ For maximum throughput in high-load scenarios:
 ```zig
 const std = @import("std");
 const zlog = @import("zlog");
-const xev = @import("xev"); // Available through zlog's peer dependencies
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
     defer _ = gpa.deinit();
 
-    // Setup event loop
-    var loop = try xev.Loop.init(.{});
-    defer loop.deinit();
-
-    // Create async logger
+    // Create async logger with managed event loop
     const config = zlog.Config{
         .async_mode = true,
         .async_queue_size = 1024,
@@ -92,8 +97,8 @@ pub fn main() !void {
     };
 
     const stdout = std.io.getStdOut().writer();
-    var logger = try zlog.Logger(config).initAsync(stdout.any(), &loop, gpa.allocator());
-    defer logger.deinit();
+    var logger = try zlog.Logger(config).initAsync(stdout.any(), gpa.allocator());
+    defer logger.deinitWithAllocator(gpa.allocator());
 
     const trace_ctx = zlog.TraceContext.init(true);
     
@@ -106,12 +111,12 @@ pub fn main() !void {
         
         // Process event loop periodically
         if (i % 1000 == 0) {
-            try loop.run(.no_wait);
+            try logger.runEventLoop();
         }
     }
     
     // Final flush
-    try loop.run(.no_wait);
+    try logger.runEventLoop();
 }
 ```
 
@@ -128,29 +133,36 @@ const Config = zlog.Config{
     .enable_simd = true,       // Enable SIMD optimizations
 };
 
-var logger = zlog.Logger(Config).init(writer);
+// Async logger with managed event loop
+var logger = try zlog.Logger(Config).initAsync(writer, allocator);
+defer logger.deinitWithAllocator(allocator);
+
+// Or sync logger (no event loop needed)
+var sync_logger = zlog.Logger(.{}).init(writer);
 ```
 
-## Field Types
+## Anonymous Struct API
 
-All field types are strongly typed and validated at compile time:
+zlog uses anonymous structs exclusively for clean, type-safe logging:
 
 ```zig
-// String fields
-zlog.field.string("service", "api")
+```zig
+// Type inference handles everything at compile time
+logger.info("User login", .{
+    .user_id = "12345",           // string
+    .username = "john_doe",       // string  
+    .attempt = 1,                 // int
+    .success = true,              // bool
+    .ip_address = "192.168.1.100", // string
+    .session_duration = 3.14,     // float
+    .metadata = null,             // null
+});
 
-// Integer fields
-zlog.field.int("temperature", -10)
-zlog.field.uint("request_id", 12345)
-
-// Floating point
-zlog.field.float("duration_ms", 123.45)
-
-// Boolean
-zlog.field.boolean("success", true)
-
-// Null values
-zlog.field.null_value("optional_data")
+// Clean syntax for all log levels
+logger.debug("Debug info", .{ .component = "auth", .step = 1 });
+logger.warn("Warning", .{ .threshold = 0.8, .current = 0.95 });
+logger.err("Error", .{ .code = 500, .message = "Internal error" });
+```
 ```
 
 ## Field Redaction
@@ -208,15 +220,29 @@ logger.fatal("Fatal error", &.{});     // Highest priority
 
 ## Performance Benchmarks
 
-Run comprehensive performance analysis:
+zlog is designed for zero-allocation logging with exceptional performance:
 
 ```bash
 # Run all benchmarks
 zig build benchmarks
 
-# Individual components (if needed)
+# Individual benchmark categories
+zig build benchmark-memory      # Memory allocation analysis
+zig build benchmark-async       # Async performance
+zig build benchmark-production  # Production workload simulation
+zig build benchmark-comprehensive # Full feature benchmarks
+
+# Run tests
 zig build test
 ```
+
+### Key Performance Features
+
+- **Zero Allocations**: No heap allocations during logging operations
+- **SIMD Optimizations**: Vectorized string operations where available  
+- **Async Batching**: Intelligent batching with backpressure handling
+- **Pre-formatted Traces**: Hex strings generated once, reused efficiently
+- **Compile-time Field Validation**: Type safety with zero runtime cost
 
 ## Trace
 
@@ -224,9 +250,10 @@ Full distributed tracing support with pre-formatted hex strings for maximum perf
 
 ```zig
 const trace_ctx = zlog.TraceContext.init(true);
-logger.infoWithTrace("Request processed", trace_ctx, &.{
-    zlog.field.string("service", "api"),
-    zlog.field.uint("status_code", 200),
+logger.infoWithTrace("Request processed", trace_ctx, .{
+    .endpoint = "/api/users",
+    .status_code = 200,
+    .duration_ms = 45.7,
 });
 ```
 
@@ -250,7 +277,160 @@ const short_id = zlog.extract_short_from_trace_id(trace_ctx.trace_id);
 
 Pre-formatted hex strings eliminate per-log conversion overhead, crucial for ultra-high throughput scenarios.
 
+## OpenTelemetry Support
 
+zlog provides full OpenTelemetry compliance with dedicated OTel loggers:
+
+### Basic OTel Logger
+
+```zig
+const std = @import("std");
+const zlog = @import("zlog");
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    defer _ = gpa.deinit();
+
+    // Create OpenTelemetry-compliant logger with managed event loop
+    var otel_logger = try zlog.otelLogger(gpa.allocator());
+    defer otel_logger.deinitWithAllocator(gpa.allocator());
+
+    // Log with OTel semantic conventions
+    otel_logger.info("HTTP request received", .{
+        .@"http.method" = "GET",
+        .@"http.url" = "/api/users",
+        .@"http.status_code" = 200,
+        .@"http.user_agent" = "curl/7.68.0",
+    });
+}
+```
+
+### Custom OTel Configuration
+
+```zig
+const otel_config = zlog.OTelConfig{
+    .base_config = .{
+        .async_mode = true,
+        .level = .debug,
+        .buffer_size = 8192,
+    },
+    .resource = .{
+        .service_name = "my-service",
+        .service_version = "1.0.0",
+        .service_namespace = "production",
+    },
+    .instrumentation_scope = .{
+        .name = "my-service-logger",
+        .version = "1.0.0",
+    },
+};
+
+var otel_logger = try zlog.otelLoggerWithConfig(otel_config, allocator);
+```
+
+### OTLP Export
+
+Export logs directly to OpenTelemetry collectors:
+
+```zig
+const exporter = zlog.OTLPExporter.init(allocator, .{
+    .endpoint = "http://localhost:4318/v1/logs",
+    .headers = &.{
+        .{ .key = "Authorization", .value = "Bearer token123" },
+    },
+});
+defer exporter.deinit();
+
+// Export log records
+try exporter.export(&log_records);
+```
+
+### Semantic Conventions
+
+Use standardized OpenTelemetry semantic conventions:
+
+```zig
+// HTTP semantic conventions
+logger.info("Request processed", .{
+    .@"http.method" = zlog.SemConv.HTTP.method.GET,
+    .@"http.status_code" = 200,
+    .@"http.route" = "/api/users/{id}",
+});
+
+// Database semantic conventions  
+logger.debug("Database query", .{
+    .@"db.system" = zlog.SemConv.DB.system.postgresql,
+    .@"db.statement" = "SELECT * FROM users WHERE id = $1",
+    .@"db.operation" = "SELECT",
+});
+
+// Common fields helper
+const common = zlog.CommonFields{
+    .service_name = "user-service",
+    .service_version = "1.2.3",
+    .environment = "production",
+};
+```
+
+## Span Tracking & Correlation
+
+Built-in span tracking for distributed tracing:
+
+```zig
+// Start a span (supports both syntaxes)
+const span = logger.spanStart("user_authentication", .{
+    .user_id = "12345",
+    .method = "oauth",
+});
+
+// Your business logic here...
+std.time.sleep(100 * std.time.ns_per_ms);
+
+// End the span with results
+logger.spanEnd(span, .{
+    .success = true,
+    .token_type = "bearer",
+});
+```
+
+Output includes automatic span correlation:
+```json
+{"level":"INFO","msg":"user_authentication","span_mark":"start","span_id":123,"task_id":456,"thread_id":789,"user_id":"12345","method":"oauth"}
+{"level":"INFO","msg":"user_authentication","span_mark":"end","span_id":123,"task_id":456,"thread_id":789,"duration_ns":100000000,"success":true,"token_type":"bearer"}
+```
+
+## Advanced Usage
+
+### Custom Event Loop Management
+
+For advanced users who need to integrate with existing event loops:
+
+```zig
+const xev = @import("xev"); // Only needed for advanced usage
+const zlog = @import("zlog");
+
+// Create your own event loop
+var loop = try xev.Loop.init(.{});
+defer loop.deinit();
+
+// Use the advanced API with custom event loop
+var logger = try zlog.Logger(.{ .async_mode = true }).initAsyncWithEventLoop(
+    writer, 
+    &loop, 
+    allocator
+);
+defer logger.deinit(); // No allocator needed since you manage the loop
+
+// You control the event loop
+try loop.run(.no_wait);
+```
+
+### Managed vs Custom Event Loop
+
+- **Managed (Recommended)**: Use `initAsync()` - zlog handles everything
+- **Custom (Advanced)**: Use `initAsyncWithEventLoop()` - you control the loop
+
+The managed approach is recommended for most users as it provides the cleanest API.
 
 ## Contributing
 
@@ -269,8 +449,41 @@ Read our [contributing guide](CONTRIBUTING.md) for detailed development process.
 # Build library
 zig build
 
+# Run all tests
+zig build test
+
+# Run all benchmarks
+zig build benchmarks
+
+# Run examples
+zig build examples
+
+# Generate documentation
+zig build docs
+
 # Format code
-zig fmt src/ benchmarks/
+zig fmt src/ benchmarks/ examples/
+```
+
+### Project Structure
+
+```
+src/
+├── zlog.zig              # Main library interface
+├── logger.zig            # Core logging implementation
+├── otel_logger.zig       # OpenTelemetry-compliant logger
+├── otel.zig              # OTel data structures
+├── otlp_exporter.zig     # OTLP export functionality
+├── semantic_conventions.zig # OTel semantic conventions
+├── field.zig             # Field type definitions
+├── trace.zig             # Distributed tracing support
+├── correlation.zig       # Span and task correlation
+├── redaction.zig         # Field redaction system
+├── config.zig            # Configuration types
+└── string_escape.zig     # JSON string escaping
+
+benchmarks/               # Performance benchmarks
+examples/                 # Usage examples
 ```
 
 ## License

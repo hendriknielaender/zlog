@@ -32,8 +32,12 @@ pub const Field = struct {
         assert(field_key.len > 0);
         assert(field_key.len < 256);
         assert(field_string_value.len < 1024 * 1024);
+        assert(@TypeOf(field_key) == []const u8);
+        assert(@TypeOf(field_string_value) == []const u8);
+
         const field_result = Field{ .key = field_key, .value = .{ .string = field_string_value } };
         assert(field_result.key.len > 0);
+        assert(field_result.value == .string);
         return field_result;
     }
 
