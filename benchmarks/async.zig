@@ -28,7 +28,7 @@ pub fn main() !void {
     defer dev_null.close();
 
     // Initialize ultra-performance async logger
-    var logger = try zlog.Logger(ultra_config).initAsync(dev_null.writer().any(), allocator);
+    var logger = try zlog.Logger(ultra_config).initAsync(dev_null.deprecatedWriter().any(), allocator);
     defer logger.deinitWithAllocator(allocator);
 
     // Create trace context for all operations
@@ -55,7 +55,7 @@ pub fn main() !void {
     }
 
     // Let the event loop process any remaining warmup messages
-    std.time.sleep(50 * std.time.ns_per_ms);
+    std.Thread.sleep(50 * std.time.ns_per_ms);
     try logger.runEventLoop();
 
     std.debug.print("  Warmup complete\n", .{});
@@ -82,7 +82,7 @@ pub fn main() !void {
         // Process any remaining messages
         for (0..10) |_| {
             try logger.runEventLoop();
-            std.time.sleep(5 * std.time.ns_per_ms);
+            std.Thread.sleep(5 * std.time.ns_per_ms);
         }
 
         const end_time = std.time.nanoTimestamp();
@@ -126,7 +126,7 @@ pub fn main() !void {
     // Final processing
     for (0..20) |_| {
         try logger.runEventLoop();
-        std.time.sleep(2 * std.time.ns_per_ms);
+        std.Thread.sleep(2 * std.time.ns_per_ms);
     }
 
     const end_burst = std.time.nanoTimestamp();
@@ -149,7 +149,7 @@ pub fn main() !void {
     var flush_iterations: u32 = 0;
     while (flush_iterations < 100) : (flush_iterations += 1) {
         try logger.runEventLoop();
-        std.time.sleep(10 * std.time.ns_per_ms);
+        std.Thread.sleep(10 * std.time.ns_per_ms);
     }
 
     std.debug.print("\n=== Ultra-Performance Benchmark Complete ===\n", .{});

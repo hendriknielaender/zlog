@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const version = std.SemanticVersion{ .major = 0, .minor = 1, .patch = 2 };
+const version = std.SemanticVersion{ .major = 0, .minor = 3, .patch = 0 };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -58,12 +58,11 @@ fn setupLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
     zlog_module.addImport("xev", deps.libxev_module);
 
     // Static library
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addLibrary(.{
         .name = "zlog",
-        .root_source_file = b.path("src/zlog.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = zlog_module,
         .version = version,
+        .linkage = .static,
     });
     lib.root_module.addImport("xev", deps.libxev_module);
     b.installArtifact(lib);
@@ -80,9 +79,11 @@ fn setupTesting(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
     // Unit tests (built into the source file)
     const unit_tests = b.addTest(.{
         .name = "zlog_tests",
-        .root_source_file = b.path("src/zlog.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zlog.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     unit_tests.root_module.addImport("xev", deps.libxev_module);
 
@@ -114,9 +115,11 @@ fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, _: std.built
     for (benchmark_names) |benchmark_name| {
         const benchmark_exe = b.addExecutable(.{
             .name = b.fmt("benchmark_{s}", .{benchmark_name}),
-            .root_source_file = b.path(b.fmt("benchmarks/{s}.zig", .{benchmark_name})),
-            .target = target,
-            .optimize = .ReleaseFast,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(b.fmt("benchmarks/{s}.zig", .{benchmark_name})),
+                .target = target,
+                .optimize = .ReleaseFast,
+            }),
         });
 
         benchmark_exe.root_module.addImport("zbench", deps.zbench_module);
@@ -147,9 +150,11 @@ fn setupExamples(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // OTel example
     const otel_example = b.addExecutable(.{
         .name = "otel_example",
-        .root_source_file = b.path("examples/otel_example.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/otel_example.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     otel_example.root_module.addImport("zlog", zlog_example_module);
     otel_example.root_module.addImport("xev", deps.libxev_module);

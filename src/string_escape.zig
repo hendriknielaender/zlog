@@ -142,7 +142,7 @@ inline fn writeEscapedCharacter(writer: anytype, input_char: u8) !void {
 }
 
 test "string escaping - basic strings without special characters" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     const test_cases = [_][]const u8{
@@ -172,7 +172,7 @@ test "string escaping - basic strings without special characters" {
 }
 
 test "string escaping - special characters" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     const test_cases = [_]struct {
@@ -208,7 +208,7 @@ test "string escaping - special characters" {
 }
 
 test "string escaping - edge cases" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     const test_cases = [_]struct {
@@ -242,7 +242,7 @@ test "string escaping - edge cases" {
 }
 
 test "string escaping - long strings with mixed content" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     const long_input = "This is a longer string with \"quotes\", \nnewlines\n, \ttabs\t, and other special chars like \\ backslashes. " ++
@@ -263,7 +263,7 @@ test "string escaping - long strings with mixed content" {
 }
 
 test "string escaping - config flag behavior" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     const test_input = "test with \"quotes\" and \n newlines";

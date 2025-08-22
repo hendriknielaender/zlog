@@ -52,8 +52,8 @@ pub const CommonFields = semantic_conventions.CommonFields;
 
 /// Create default async logger with managed event loop
 pub fn default(memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = true }) {
-    const stderr_file = std.io.getStdErr();
-    const stderr_any_writer = stderr_file.writer().any();
+    const stderr_file = std.fs.File.stderr();
+    const stderr_any_writer = stderr_file.deprecatedWriter().any();
 
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
@@ -66,8 +66,8 @@ pub fn default(memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = tru
 
 /// Create default async logger with custom event loop (advanced usage)
 pub fn defaultWithEventLoop(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = true }) {
-    const stderr_file = std.io.getStdErr();
-    const stderr_any_writer = stderr_file.writer().any();
+    const stderr_file = std.fs.File.stderr();
+    const stderr_any_writer = stderr_file.deprecatedWriter().any();
 
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
@@ -129,8 +129,8 @@ pub fn loggerWithConfigAndEventLoop(comptime custom_config: Config, output_write
 }
 
 pub fn loggerWithRedaction(comptime redaction_options: RedactionOptions) LoggerWithRedaction(.{}, redaction_options) {
-    const stderr_file = std.io.getStdErr();
-    const stderr_any_writer = stderr_file.writer().any();
+    const stderr_file = std.fs.File.stderr();
+    const stderr_any_writer = stderr_file.deprecatedWriter().any();
 
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
@@ -142,8 +142,8 @@ pub fn loggerWithRedaction(comptime redaction_options: RedactionOptions) LoggerW
 
 /// Create an OpenTelemetry-compliant logger with managed event loop (async only)
 pub fn otelLogger(memory_allocator: std.mem.Allocator) !OTelLogger(.{ .base_config = .{ .async_mode = true } }) {
-    const stderr_file = std.io.getStdErr();
-    const stderr_any_writer = stderr_file.writer().any();
+    const stderr_file = std.fs.File.stderr();
+    const stderr_any_writer = stderr_file.deprecatedWriter().any();
 
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
@@ -155,8 +155,8 @@ pub fn otelLogger(memory_allocator: std.mem.Allocator) !OTelLogger(.{ .base_conf
 
 /// Create an OpenTelemetry-compliant logger with custom event loop (async only)
 pub fn otelLoggerWithEventLoop(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !OTelLogger(.{ .base_config = .{ .async_mode = true } }) {
-    const stderr_file = std.io.getStdErr();
-    const stderr_any_writer = stderr_file.writer().any();
+    const stderr_file = std.fs.File.stderr();
+    const stderr_any_writer = stderr_file.deprecatedWriter().any();
 
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
@@ -175,8 +175,8 @@ pub fn otelLoggerWithConfig(comptime otel_config: OTelConfig, event_loop_ptr: *x
         }
     }
 
-    const stderr_file = std.io.getStdErr();
-    const stderr_any_writer = stderr_file.writer().any();
+    const stderr_file = std.fs.File.stderr();
+    const stderr_any_writer = stderr_file.deprecatedWriter().any();
 
     std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
     std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
@@ -198,7 +198,7 @@ pub const field = field_mod.Field;
 const testing = std.testing;
 
 test "JSON serialization with basic message" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{}).init(buffer.writer().any());
@@ -211,7 +211,7 @@ test "JSON serialization with basic message" {
 }
 
 test "JSON serialization with multiple fields" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{}).init(buffer.writer().any());
@@ -230,7 +230,7 @@ test "JSON serialization with multiple fields" {
 }
 
 test "JSON escaping in strings" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{}).init(buffer.writer().any());
@@ -245,7 +245,7 @@ test "JSON escaping in strings" {
 }
 
 test "All field types" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{}).init(buffer.writer().any());
@@ -271,7 +271,7 @@ test "All field types" {
 }
 
 test "Level filtering" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{ .level = .warn }).init(buffer.writer().any());
@@ -296,7 +296,7 @@ test "Level filtering" {
 }
 
 test "Empty fields array" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{}).init(buffer.writer().any());
@@ -308,7 +308,7 @@ test "Empty fields array" {
 }
 
 test "Field limit enforcement" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{ .max_fields = 3 }).init(buffer.writer().any());
@@ -327,7 +327,7 @@ test "Field limit enforcement" {
 }
 
 test "Control characters escaping" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{}).init(buffer.writer().any());
@@ -348,7 +348,7 @@ test "Control characters escaping" {
 }
 
 test "All log levels" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{ .level = .trace }).init(buffer.writer().any());
@@ -370,7 +370,7 @@ test "All log levels" {
 }
 
 test "Large message within buffer" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{ .buffer_size = 1024 }).init(buffer.writer().any());
@@ -383,7 +383,7 @@ test "Large message within buffer" {
 }
 
 test "Unicode characters" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{}).init(buffer.writer().any());
@@ -410,7 +410,7 @@ test "Default logger creation" {
 }
 
 test "Custom configuration" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     const custom_config = Config{
@@ -426,7 +426,7 @@ test "Custom configuration" {
 }
 
 test "Field convenience functions" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var log = Logger(.{}).init(buffer.writer().any());
@@ -452,7 +452,7 @@ test "Field convenience functions" {
 test "Async logger creation and basic functionality" {
     const test_allocator = testing.allocator;
 
-    var buffer = std.ArrayList(u8).init(test_allocator);
+    var buffer = std.array_list.Managed(u8).init(test_allocator);
     defer buffer.deinit();
 
     var async_log = try Logger(.{ .async_mode = true }).initAsync(
@@ -469,7 +469,7 @@ test "Async logger creation and basic functionality" {
     // Process messages by running the managed event loop
     for (0..5) |_| {
         try async_log.runEventLoop();
-        std.time.sleep(5 * std.time.ns_per_ms);
+        std.Thread.sleep(5 * std.time.ns_per_ms);
     }
 
     async_log.async_logger.?.flushPending();
@@ -482,7 +482,7 @@ test "Async logger creation and basic functionality" {
 test "Async logger with high volume" {
     const test_allocator = testing.allocator;
 
-    var buffer = std.ArrayList(u8).init(test_allocator);
+    var buffer = std.array_list.Managed(u8).init(test_allocator);
     defer buffer.deinit();
 
     var async_log = try Logger(.{ .async_mode = true }).initAsync(
@@ -501,7 +501,7 @@ test "Async logger with high volume" {
     // Process messages by running the managed event loop
     for (0..5) |_| {
         try async_log.runEventLoop();
-        std.time.sleep(5 * std.time.ns_per_ms);
+        std.Thread.sleep(5 * std.time.ns_per_ms);
     }
 
     async_log.async_logger.?.flushPending();
@@ -529,7 +529,7 @@ test "Async mode configuration validation" {
     // Event loop now managed internally
     // Loop deinit handled by logger
 
-    var buffer = std.ArrayList(u8).init(test_allocator);
+    var buffer = std.array_list.Managed(u8).init(test_allocator);
     defer buffer.deinit();
 
     const async_config = Config{
@@ -556,7 +556,7 @@ test "Default async logger creation" {
     var async_log = try default(test_allocator);
     async_log.deinitWithAllocator(test_allocator); // Clean up first logger
 
-    var buffer = std.ArrayList(u8).init(test_allocator);
+    var buffer = std.array_list.Managed(u8).init(test_allocator);
     defer buffer.deinit();
 
     async_log = try Logger(.{ .async_mode = true }).initAsync(
@@ -572,7 +572,7 @@ test "Default async logger creation" {
 test "RedactionConfig context pattern" {
     const test_allocator = testing.allocator;
 
-    var log_output = std.ArrayList(u8).init(test_allocator);
+    var log_output = std.array_list.Managed(u8).init(test_allocator);
     defer log_output.deinit();
 
     var redaction_cfg = RedactionConfig.init(test_allocator);
@@ -603,7 +603,7 @@ test "Context-based redaction in action" {
     try redaction_cfg.addKey("api_key");
     try redaction_cfg.addKey("ssn");
 
-    var log_output = std.ArrayList(u8).init(test_allocator);
+    var log_output = std.array_list.Managed(u8).init(test_allocator);
     defer log_output.deinit();
 
     var log = Logger(.{}).initWithRedaction(log_output.writer().any(), &redaction_cfg);
@@ -628,7 +628,7 @@ test "Compile-time redaction - zero cost filtering" {
         .redacted_fields = &.{ "password", "api_key", "secret" },
     });
 
-    var log_output = std.ArrayList(u8).init(test_allocator);
+    var log_output = std.array_list.Managed(u8).init(test_allocator);
     defer log_output.deinit();
 
     var log = CompileTimeLogger.init(log_output.writer().any());
@@ -660,7 +660,7 @@ test "Hybrid redaction - compile-time + runtime" {
         .redacted_fields = &.{ "password", "api_key" },
     });
 
-    var log_output = std.ArrayList(u8).init(test_allocator);
+    var log_output = std.array_list.Managed(u8).init(test_allocator);
     defer log_output.deinit();
 
     var log = HybridLogger.initWithRedaction(log_output.writer().any(), &runtime_redaction);
@@ -686,7 +686,7 @@ test "Hybrid redaction - compile-time + runtime" {
 test "Convenience constructor for compile-time redaction" {
     const test_allocator = testing.allocator;
 
-    var output = std.ArrayList(u8).init(test_allocator);
+    var output = std.array_list.Managed(u8).init(test_allocator);
     defer output.deinit();
 
     const log_factory = loggerWithRedaction(.{
