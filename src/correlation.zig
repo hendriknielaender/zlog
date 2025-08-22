@@ -50,7 +50,35 @@ pub const Span = struct {
 
 pub const TaskContext = struct {
     trace_context: trace_mod.TraceContext,
-    span_stack: std.BoundedArray([8]u8, 32),
+    span_stack: struct {
+        data: [32][8]u8 = undefined,
+        len: usize = 0,
+
+        pub fn append(self: *@This(), item: [8]u8) !void {
+            if (self.len >= 32) return error.Overflow;
+            self.data[self.len] = item;
+            self.len += 1;
+        }
+
+        pub fn pop(self: *@This()) ?[8]u8 {
+            if (self.len == 0) return null;
+            self.len -= 1;
+            return self.data[self.len];
+        }
+
+        pub fn slice(self: *const @This()) [][8]u8 {
+            return self.data[0..self.len];
+        }
+
+        pub fn get(self: *const @This(), index: usize) [8]u8 {
+            return self.data[index];
+        }
+
+        pub fn capacity(self: *const @This()) usize {
+            _ = self;
+            return 32;
+        }
+    } = .{},
 
     id: u64,
     parent_id: ?u64,
@@ -59,7 +87,7 @@ pub const TaskContext = struct {
         assert(parent_context_id == null or parent_context_id.? >= 1);
 
         const trace_ctx = trace_mod.TraceContext.init(false);
-        const span_stack_empty = std.BoundedArray([8]u8, 32).init(0) catch @panic("BoundedArray init failed with valid capacity");
+        const span_stack_empty = @TypeOf(@as(TaskContext, undefined).span_stack){};
 
         const legacy_task_id = trace_mod.extract_short_from_trace_id(trace_ctx.trace_id);
         const legacy_parent_id = if (parent_context_id) |pid| pid else null;

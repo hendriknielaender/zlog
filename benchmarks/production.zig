@@ -5,7 +5,7 @@ const zlog = @import("zlog");
 const ProductionWriter = struct {
     const Self = @This();
     const Error = error{ DiskFull, NetworkTimeout, PermissionDenied };
-    const Writer = std.io.Writer(*Self, Error, write);
+    const Writer = std.io.GenericWriter(*Self, Error, write);
 
     bytes_written: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     write_latency_ns: u32,
@@ -22,6 +22,10 @@ const ProductionWriter = struct {
 
     pub fn writer(self: *Self) Writer {
         return .{ .context = self };
+    }
+
+    pub fn deprecatedWriter(self: *Self) Writer {
+        return self.writer();
     }
 
     fn write(self: *Self, bytes: []const u8) Error!usize {
@@ -81,7 +85,7 @@ const RequestContext = struct {
 
     fn formatRequestId(self: *const RequestContext) [32]u8 {
         var result: [32]u8 = undefined;
-        _ = std.fmt.bufPrint(&result, "{x}", .{std.fmt.fmtSliceHexLower(&self.request_id)}) catch unreachable;
+        _ = std.fmt.bufPrint(&result, "{x}", .{self.request_id}) catch unreachable;
         return result;
     }
 };
@@ -183,7 +187,7 @@ const WorkloadSimulator = struct {
 
             // Realistic request pacing
             if (i % 100 == 0) {
-                std.time.sleep(1 * std.time.ns_per_ms);
+                std.Thread.sleep(1 * std.time.ns_per_ms);
             }
         }
 
@@ -256,7 +260,7 @@ pub fn main() !void {
 
         // Sync benchmark
         var sync_writer = ProductionWriter.init(scenario.write_latency_ns, scenario.failure_rate);
-        var sync_logger = zlog.Logger(.{}).init(sync_writer.writer().any());
+        var sync_logger = zlog.Logger(.{}).init(sync_writer.deprecatedWriter().any());
         var sync_workload = WorkloadSimulator.init(allocator, request_count, concurrent_requests, error_rate);
 
         std.debug.print("Running sync benchmark...\n", .{});
@@ -270,7 +274,7 @@ pub fn main() !void {
         var async_logger = try zlog.Logger(.{
             .async_mode = true,
             .async_queue_size = 8192,
-        }).initAsync(async_writer.writer().any(), allocator);
+        }).initAsync(async_writer.deprecatedWriter().any(), allocator);
         defer async_logger.deinitWithAllocator(allocator);
 
         var async_workload = WorkloadSimulator.init(allocator, request_count, concurrent_requests, error_rate);
@@ -279,7 +283,7 @@ pub fn main() !void {
         const async_result = try async_workload.runAsyncWorkload(&async_logger);
 
         // Allow time for async processing to complete
-        std.time.sleep(100 * std.time.ns_per_ms);
+        std.Thread.sleep(100 * std.time.ns_per_ms);
 
         async_result.print("Async Logging");
         std.debug.print("Bytes Written:      {d:>8} bytes\n", .{async_writer.getBytesWritten()});

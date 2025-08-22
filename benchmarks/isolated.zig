@@ -9,10 +9,14 @@ pub fn main() !void {
     var null_writer = struct {
         const Self = @This();
         const Error = error{};
-        const Writer = std.io.Writer(*Self, Error, write);
+        const Writer = std.io.GenericWriter(*Self, Error, write);
 
         pub fn writer(self: *Self) Writer {
             return .{ .context = self };
+        }
+
+        pub fn deprecatedWriter(self: *Self) Writer {
+            return self.writer();
         }
 
         fn write(self: *Self, bytes: []const u8) Error!usize {
@@ -53,7 +57,7 @@ pub fn main() !void {
 
     for (0..N) |_| {
         const t0 = std.time.nanoTimestamp();
-        _ = null_writer.writer().write(dummy_json) catch 0;
+        _ = null_writer.deprecatedWriter().write(dummy_json) catch 0;
         const t1 = std.time.nanoTimestamp();
         write_ns += @intCast(t1 - t0);
     }
@@ -89,7 +93,7 @@ pub fn main() !void {
 
     // Phase E: Complete logger call (for comparison)
     std.debug.print("Phase E: Complete Logger Pipeline\n", .{});
-    var logger = zlog.Logger(.{}).init(null_writer.writer().any());
+    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
     var complete_ns: u64 = 0;
 
     for (0..N) |i| {

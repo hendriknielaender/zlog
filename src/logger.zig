@@ -514,12 +514,36 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             return span_created;
         }
 
-        fn buildSpanStartFields(self: *Self, span_created: correlation.Span, operation_fields_struct: anytype) std.BoundedArray(field.Field, max_fields + 4) {
+        const BoundedFieldArrayStart = struct {
+            data: [max_fields + 4]field.Field = undefined,
+            len: usize = 0,
+
+            pub fn init(capacity: usize) !@This() {
+                _ = capacity;
+                return @This(){};
+            }
+
+            pub fn append(self: *@This(), item: field.Field) !void {
+                if (self.len >= max_fields + 4) return error.Overflow;
+                self.data[self.len] = item;
+                self.len += 1;
+            }
+
+            pub fn slice(self: *const @This()) []const field.Field {
+                return self.data[0..self.len];
+            }
+
+            pub fn constSlice(self: *const @This()) []const field.Field {
+                return self.data[0..self.len];
+            }
+        };
+
+        fn buildSpanStartFields(self: *Self, span_created: correlation.Span, operation_fields_struct: anytype) BoundedFieldArrayStart {
             assert(span_created.id >= 1);
             assert(span_created.task_id >= 1);
             assert(span_created.thread_id >= 1);
 
-            var span_fields_array = std.BoundedArray(field.Field, max_fields + 4).init(0) catch @panic("BoundedArray init failed with valid capacity");
+            var span_fields_array = BoundedFieldArrayStart.init(0) catch @panic("BoundedArray init failed with valid capacity");
 
             span_fields_array.append(field.Field.string("span_mark", "start")) catch @panic("BoundedArray append failed with sufficient capacity");
             span_fields_array.append(field.Field.uint("span_id", span_created.id)) catch @panic("BoundedArray append failed with sufficient capacity");
@@ -554,13 +578,37 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             self.logWithTrace(.info, completed_span.name, default_trace_ctx, span_fields.constSlice());
         }
 
-        fn buildSpanEndFields(self: *Self, completed_span: correlation.Span, span_duration_ns: i128, completion_fields_struct: anytype) std.BoundedArray(field.Field, max_fields + 5) {
+        const BoundedFieldArray = struct {
+            data: [max_fields + 5]field.Field = undefined,
+            len: usize = 0,
+
+            pub fn init(capacity: usize) !@This() {
+                _ = capacity;
+                return @This(){};
+            }
+
+            pub fn append(self: *@This(), item: field.Field) !void {
+                if (self.len >= max_fields + 5) return error.Overflow;
+                self.data[self.len] = item;
+                self.len += 1;
+            }
+
+            pub fn slice(self: *const @This()) []const field.Field {
+                return self.data[0..self.len];
+            }
+
+            pub fn constSlice(self: *const @This()) []const field.Field {
+                return self.data[0..self.len];
+            }
+        };
+
+        fn buildSpanEndFields(self: *Self, completed_span: correlation.Span, span_duration_ns: i128, completion_fields_struct: anytype) BoundedFieldArray {
             assert(completed_span.id >= 1);
             assert(completed_span.task_id >= 1);
             assert(completed_span.thread_id >= 1);
             assert(span_duration_ns >= 0);
 
-            var span_fields_array = std.BoundedArray(field.Field, max_fields + 5).init(0) catch @panic("BoundedArray init failed with valid capacity");
+            var span_fields_array = BoundedFieldArray.init(0) catch @panic("BoundedArray init failed with valid capacity");
 
             span_fields_array.append(field.Field.string("span_mark", "end")) catch @panic("BoundedArray append failed with sufficient capacity");
             span_fields_array.append(field.Field.uint("span_id", completed_span.id)) catch @panic("BoundedArray append failed with sufficient capacity");
@@ -843,7 +891,7 @@ fn AsyncLogger(comptime cfg: config.Config) type {
 
         // Event-driven queue using libxev
         const AsyncQueue = struct {
-            entries: std.ArrayList(LogEntry),
+            entries: std.array_list.Managed(LogEntry),
             mutex: std.Thread.Mutex,
             condition: std.Thread.Condition,
             max_size: u32,
@@ -851,7 +899,7 @@ fn AsyncLogger(comptime cfg: config.Config) type {
 
             fn init(allocator: std.mem.Allocator, max_size: u32, backpressure: BackpressureStrategy) AsyncQueue {
                 return AsyncQueue{
-                    .entries = std.ArrayList(LogEntry).init(allocator),
+                    .entries = std.array_list.Managed(LogEntry).init(allocator),
                     .mutex = .{},
                     .condition = .{},
                     .max_size = max_size,
@@ -935,7 +983,7 @@ fn AsyncLogger(comptime cfg: config.Config) type {
 
         // Batching state
         batch_buffer: [MAX_BATCH_SIZE]LogEntry,
-        write_buffer: std.ArrayList(u8),
+        write_buffer: std.array_list.Managed(u8),
 
         // Performance metrics
         logs_written: std.atomic.Value(u64),
@@ -965,7 +1013,7 @@ fn AsyncLogger(comptime cfg: config.Config) type {
                 .write_completion = undefined,
                 .should_stop = std.atomic.Value(bool).init(false),
                 .batch_buffer = undefined,
-                .write_buffer = std.ArrayList(u8).init(allocator),
+                .write_buffer = std.array_list.Managed(u8).init(allocator),
                 .logs_written = std.atomic.Value(u64).init(0),
                 .logs_dropped = std.atomic.Value(u64).init(0),
                 .flush_count = std.atomic.Value(u64).init(0),
@@ -1171,7 +1219,7 @@ fn AsyncLogger(comptime cfg: config.Config) type {
 test "Ergonomic API with anonymous struct fields" {
     const testing = std.testing;
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     var logger = Logger(.{ .max_fields = 8 }).init(buffer.writer().any());
