@@ -2,9 +2,9 @@
 > Still work in progress.
 
 # zlog - structured logging for zig
-[![MIT license][badge_license]][license_link]
-![GitHub code size in bytes][badge_code_size]
-[![PRs Welcome][badge_prs]][contributing_link]
+[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/LICENSE)
+![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/hendriknielaender/zlog)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md)
 <img src="logo.png" alt="zlog logo" align="right" width="20%"/>
 
 zlog is a high-performance structured logging library for Zig with full OpenTelemetry support.
