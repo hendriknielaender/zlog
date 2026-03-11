@@ -1,33 +1,17 @@
 const std = @import("std");
 const zbench = @import("zbench");
 const zlog = @import("zlog");
+const NullWriter = @import("writers.zig").NullWriter;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
-// Null writer for performance testing without I/O overhead
-const NullWriter = struct {
-    const Self = @This();
-    const Error = error{};
-    const Writer = std.io.GenericWriter(*Self, Error, write);
-
-    pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
-    }
-
-    pub fn deprecatedWriter(self: *Self) Writer {
-        return self.writer();
-    }
-
-    fn write(self: *Self, bytes: []const u8) Error!usize {
-        _ = self;
-        return bytes.len;
-    }
-};
+const json_prefix =
+    "{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\"," ++
+    "\"action\":\"login\",\"timestamp\":";
 
 fn benchZlogNoAllocations(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     for (0..1000) |i| {
         logger.info("User action", &.{
@@ -41,7 +25,7 @@ fn benchZlogNoAllocations(allocator: std.mem.Allocator) void {
 fn benchZlogWithTracking(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     for (0..1000) |i| {
         logger.info("User action", &.{
@@ -57,15 +41,15 @@ fn benchStdFormatWithAllocations(allocator: std.mem.Allocator) void {
 
     for (0..1000) |i| {
         // This simulates a typical logging approach that allocates
-        var list = std.array_list.Managed(u8).init(allocator);
+        var list = std.Io.Writer.Allocating.init(allocator);
         defer list.deinit();
 
-        const writer = list.writer();
-        writer.writeAll("{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":") catch @panic("Write error");
+        const writer = &list.writer;
+        writer.writeAll(json_prefix) catch @panic("Write error");
         writer.print("{d}", .{i}) catch @panic("Write error");
         writer.writeAll("}\n") catch @panic("Write error");
 
-        _ = null_writer.deprecatedWriter().write(list.items) catch {};
+        null_writer.writer.writeAll(list.written()) catch {};
     }
 }
 
@@ -74,15 +58,15 @@ fn benchArrayListLogging(allocator: std.mem.Allocator) void {
 
     for (0..1000) |i| {
         // Another common pattern - using ArrayList for dynamic formatting
-        var list = std.array_list.Managed(u8).init(allocator);
+        var list = std.Io.Writer.Allocating.init(allocator);
         defer list.deinit();
 
-        const writer = list.writer();
-        writer.writeAll("{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":") catch @panic("Write error");
+        const writer = &list.writer;
+        writer.writeAll(json_prefix) catch @panic("Write error");
         writer.print("{d}", .{i}) catch @panic("Write error");
         writer.writeAll("}\n") catch @panic("Write error");
 
-        _ = null_writer.deprecatedWriter().write(list.items) catch {};
+        null_writer.writer.writeAll(list.written()) catch {};
     }
 }
 
@@ -92,19 +76,17 @@ fn benchReusedBuffer(allocator: std.mem.Allocator) void {
     var buffer: [1024]u8 = undefined;
 
     for (0..1000) |i| {
-        var stream = std.io.fixedBufferStream(&buffer);
-        const writer = stream.writer();
-        writer.writeAll("{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":") catch @panic("Write error");
+        var writer = std.Io.Writer.fixed(&buffer);
+        writer.writeAll(json_prefix) catch @panic("Write error");
         writer.print("{d}", .{i}) catch @panic("Write error");
         writer.writeAll("}\n") catch @panic("Write error");
-        const formatted = stream.getWritten();
+        const formatted = writer.buffered();
 
-        _ = null_writer.deprecatedWriter().write(formatted) catch {};
+        null_writer.writer.writeAll(formatted) catch {};
     }
 }
 
 pub fn main() !void {
-    const stdout = std.fs.File.stdout().deprecatedWriter();
     var bench = zbench.Benchmark.init(gpa.allocator(), .{
         .iterations = 32,
     });
@@ -114,8 +96,12 @@ pub fn main() !void {
         if (deinit_status == .leak) std.debug.panic("Memory leak detected", .{});
     }
 
-    try stdout.writeAll("=== Memory Allocation Benchmarks ===\n\n");
-    try stdout.writeAll("Comparing zlog's zero-allocation approach with traditional logging methods.\n\n");
+    std.debug.print("=== Memory Allocation Benchmarks ===\n\n", .{});
+    std.debug.print(
+        "Comparing zlog's zero-allocation approach with traditional logging " ++
+            "methods.\n\n",
+        .{},
+    );
 
     // zlog benchmarks (should show zero allocations)
     try bench.add("zlog (no tracking)", benchZlogNoAllocations, .{});
@@ -140,7 +126,11 @@ pub fn main() !void {
 
     // Skip zbench for now and use simple output
     std.debug.print("\n=== Memory Allocation Benchmarks ===\n\n", .{});
-    std.debug.print("Comparing zlog's zero-allocation approach with traditional logging methods.\n\n", .{});
+    std.debug.print(
+        "Comparing zlog's zero-allocation approach with traditional logging " ++
+            "methods.\n\n",
+        .{},
+    );
 
     std.debug.print("Running benchmarks...\n", .{});
     std.debug.print("• zlog (no tracking): Running...\n", .{});
@@ -154,10 +144,10 @@ pub fn main() !void {
     std.debug.print("• reused buffer: Running...\n", .{});
     benchReusedBuffer(allocator);
 
-    try stdout.writeAll("\n=== Analysis ===\n");
-    try stdout.writeAll("• zlog shows zero allocations, confirming the zero-allocation design\n");
-    try stdout.writeAll("• std.fmt.allocPrint allocates for every message (typical logging)\n");
-    try stdout.writeAll("• ArrayList logging allocates and reallocates buffers\n");
-    try stdout.writeAll("• Reused buffer approach matches zlog's zero allocation goal\n");
-    try stdout.writeAll("• zlog provides zero allocations AND structured logging convenience\n");
+    std.debug.print("\n=== Analysis ===\n", .{});
+    std.debug.print("• zlog shows zero allocations, confirming the zero-allocation design\n", .{});
+    std.debug.print("• std.fmt.allocPrint allocates for every message (typical logging)\n", .{});
+    std.debug.print("• ArrayList logging allocates and reallocates buffers\n", .{});
+    std.debug.print("• Reused buffer approach matches zlog's zero allocation goal\n", .{});
+    std.debug.print("• zlog provides zero allocations AND structured logging convenience\n", .{});
 }

@@ -1,26 +1,7 @@
 const std = @import("std");
 const zbench = @import("zbench");
 const zlog = @import("zlog");
-
-// Null writer for performance testing without I/O overhead
-const NullWriter = struct {
-    const Self = @This();
-    const Error = error{};
-    const Writer = std.io.GenericWriter(*Self, Error, write);
-
-    pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
-    }
-
-    pub fn deprecatedWriter(self: *Self) Writer {
-        return self.writer();
-    }
-
-    fn write(self: *Self, bytes: []const u8) Error!usize {
-        _ = self;
-        return bytes.len;
-    }
-};
+const NullWriter = @import("writers.zig").NullWriter;
 
 // Global allocator for benchmarks
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -35,7 +16,7 @@ fn benchmarkVerboseOtelApi(allocator: std.mem.Allocator) void {
         .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
     };
 
-    var logger = zlog.OTelLogger(otel_config).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
     defer logger.deinit();
 
     logger.info("User authentication successful", &.{
@@ -58,7 +39,7 @@ fn benchmarkUnifiedOtelApi(allocator: std.mem.Allocator) void {
         .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
     };
 
-    var logger = zlog.OTelLogger(otel_config).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
     defer logger.deinit();
 
     logger.info("User authentication successful", .{
@@ -80,7 +61,7 @@ fn benchmarkVerboseOtelWithTrace(allocator: std.mem.Allocator) void {
         .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
     };
 
-    var logger = zlog.OTelLogger(otel_config).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
     defer logger.deinit();
 
     const trace_ctx = zlog.TraceContext.init(true);
@@ -104,7 +85,7 @@ fn benchmarkUnifiedOtelWithTrace(allocator: std.mem.Allocator) void {
         .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
     };
 
-    var logger = zlog.OTelLogger(otel_config).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
     defer logger.deinit();
 
     const trace_ctx = zlog.TraceContext.init(true);
@@ -128,7 +109,7 @@ fn benchmarkVerboseMixedTypes(allocator: std.mem.Allocator) void {
         .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
     };
 
-    var logger = zlog.OTelLogger(otel_config).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
     defer logger.deinit();
 
     logger.info("Mixed field types", &.{
@@ -151,7 +132,7 @@ fn benchmarkUnifiedMixedTypes(allocator: std.mem.Allocator) void {
         .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
     };
 
-    var logger = zlog.OTelLogger(otel_config).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
     defer logger.deinit();
 
     logger.info("Mixed field types", .{
@@ -169,7 +150,11 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     std.debug.print("=== Unified OTEL API Performance Benchmark ===\n\n", .{});
-    std.debug.print("Comparing field array vs anonymous struct syntax (sync mode for benchmarking).\n\n", .{});
+    std.debug.print(
+        "Comparing field array vs anonymous struct syntax (sync mode for " ++
+            "benchmarking).\n\n",
+        .{},
+    );
 
     var bench = zbench.Benchmark.init(allocator, .{});
     defer bench.deinit();
@@ -198,5 +183,9 @@ pub fn main() !void {
     std.debug.print("• unified_otel_with_trace: Unified API with trace context\n", .{});
     std.debug.print("• verbose_mixed_types: Field arrays with various types\n", .{});
     std.debug.print("• unified_mixed_types: Unified API with various types\n", .{});
-    std.debug.print("\nThe unified API should show similar or better performance due to compile-time optimization.\n", .{});
+    std.debug.print(
+        "\nThe unified API should show similar or better performance due to " ++
+            "compile-time optimization.\n",
+        .{},
+    );
 }

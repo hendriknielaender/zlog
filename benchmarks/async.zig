@@ -1,14 +1,10 @@
 const std = @import("std");
 const zlog = @import("zlog");
 
-/// Ultra-performance benchmark with proper libxev integration
+/// Ultra-performance benchmark for the async queue and batched flush path.
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    std.debug.print("=== Ultra-Performance Async Logger Benchmark (Fixed) ===\n", .{});
-    std.debug.print("Using libxev event loop with proper async integration\n\n", .{});
+    std.debug.print("=== Ultra-Performance Async Logger Benchmark ===\n", .{});
+    std.debug.print("Using bounded queueing with explicit batched flushes\n\n", .{});
 
     // Create high-performance logger configuration
     const ultra_config = zlog.Config{
@@ -21,15 +17,16 @@ pub fn main() !void {
         .enable_simd = true,
     };
 
-    // Event loop is now managed internally by zlog
-
     // Use /dev/null for maximum throughput testing
     const dev_null = try std.fs.openFileAbsolute("/dev/null", .{ .mode = .write_only });
     defer dev_null.close();
+    var dev_null_buffer: [4096]u8 = undefined;
+    var dev_null_writer = dev_null.writer(&dev_null_buffer);
 
     // Initialize ultra-performance async logger
-    var logger = try zlog.Logger(ultra_config).initAsync(dev_null.deprecatedWriter().any(), allocator);
-    defer logger.deinitWithAllocator(allocator);
+    var async_state = zlog.Logger(ultra_config).AsyncState{};
+    var logger = zlog.Logger(ultra_config).initAsync(&dev_null_writer, &async_state);
+    defer logger.deinit();
 
     // Create trace context for all operations
     const trace_ctx = zlog.TraceContext.init(true);
@@ -49,14 +46,14 @@ pub fn main() !void {
         logger.infoWithTrace("warmup message", trace_ctx, &benchmark_fields);
 
         if (i % 100 == 0) {
-            // Run event loop to process timer callbacks
-            try logger.runEventLoop();
+            // Drain queued logs periodically.
+            logger.drain();
         }
     }
 
-    // Let the event loop process any remaining warmup messages
+    // Drain any remaining warmup messages.
     std.Thread.sleep(50 * std.time.ns_per_ms);
-    try logger.runEventLoop();
+    logger.drain();
 
     std.debug.print("  Warmup complete\n", .{});
     std.debug.print("Starting main benchmark...\n", .{});
@@ -69,19 +66,19 @@ pub fn main() !void {
 
         const start_time = std.time.nanoTimestamp();
 
-        // Send messages with periodic event loop processing
+        // Send messages with periodic queue draining.
         for (0..msg_count) |i| {
             logger.infoWithTrace("high throughput test message", trace_ctx, &benchmark_fields);
 
-            // Process event loop periodically to let the timer callbacks run
+            // Process queued writes periodically.
             if (i % 1000 == 0) {
-                try logger.runEventLoop();
+                logger.drain();
             }
         }
 
-        // Process any remaining messages
+        // Process any remaining messages.
         for (0..10) |_| {
-            try logger.runEventLoop();
+            logger.drain();
             std.Thread.sleep(5 * std.time.ns_per_ms);
         }
 
@@ -93,14 +90,20 @@ pub fn main() !void {
         std.debug.print("  Time:         {d:.1} ms\n", .{duration_ms});
         std.debug.print("  Messages:     {}\n", .{msg_count});
         std.debug.print("  Throughput:   {d:.0} messages/second\n", .{messages_per_second});
-        std.debug.print("  Throughput:   {d:.2} million messages/second\n", .{messages_per_second / 1_000_000.0});
+        std.debug.print(
+            "  Throughput:   {d:.2} million messages/second\n",
+            .{messages_per_second / 1_000_000.0},
+        );
 
         if (messages_per_second >= 1_000_000.0) {
             std.debug.print("  ✅ SUCCESS: Achieved > 1M messages/second!\n", .{});
         } else if (messages_per_second >= 500_000.0) {
             std.debug.print("  ⚠️  Good: Achieved > 500K messages/second\n", .{});
         } else {
-            std.debug.print("  📊 Result: {d:.0}K messages/second\n", .{messages_per_second / 1000.0});
+            std.debug.print(
+                "  📊 Result: {d:.0}K messages/second\n",
+                .{messages_per_second / 1000.0},
+            );
         }
     }
 
@@ -113,19 +116,19 @@ pub fn main() !void {
     const burst_count: u32 = 100_000;
     const start_burst = std.time.nanoTimestamp();
 
-    // Send messages with minimal event loop processing
+    // Send messages with minimal queue draining.
     for (0..burst_count) |i| {
         logger.infoWithTrace("burst", trace_ctx, &minimal_fields);
 
-        // Less frequent event processing for maximum throughput
+        // Less frequent draining for maximum throughput.
         if (i % 10000 == 0) {
-            try logger.runEventLoop();
+            logger.drain();
         }
     }
 
-    // Final processing
+    // Final processing.
     for (0..20) |_| {
-        try logger.runEventLoop();
+        logger.drain();
         std.Thread.sleep(2 * std.time.ns_per_ms);
     }
 
@@ -136,7 +139,10 @@ pub fn main() !void {
     std.debug.print("  Time:         {d:.1} ms\n", .{burst_duration_ms});
     std.debug.print("  Messages:     {}\n", .{burst_count});
     std.debug.print("  Throughput:   {d:.0} messages/second\n", .{burst_throughput});
-    std.debug.print("  Throughput:   {d:.2} million messages/second\n", .{burst_throughput / 1_000_000.0});
+    std.debug.print(
+        "  Throughput:   {d:.2} million messages/second\n",
+        .{burst_throughput / 1_000_000.0},
+    );
 
     if (burst_throughput >= 2_000_000.0) {
         std.debug.print("  🚀 EXCELLENT: Achieved > 2M messages/second!\n", .{});
@@ -144,20 +150,19 @@ pub fn main() !void {
         std.debug.print("  ✅ SUCCESS: Achieved > 1M messages/second!\n", .{});
     }
 
-    // Final flush - run event loop until no more work
+    // Final flush - run until the queue is empty.
     std.debug.print("\nFlushing remaining messages...\n", .{});
     var flush_iterations: u32 = 0;
     while (flush_iterations < 100) : (flush_iterations += 1) {
-        try logger.runEventLoop();
+        logger.drain();
         std.Thread.sleep(10 * std.time.ns_per_ms);
     }
 
     std.debug.print("\n=== Ultra-Performance Benchmark Complete ===\n", .{});
-    std.debug.print("libxev Integration Summary:\n", .{});
-    std.debug.print("  - Timer-based batch processing (1ms intervals)\n", .{});
-    std.debug.print("  - Event loop run with .no_wait mode\n", .{});
-    std.debug.print("  - Lock-free ring buffer for log entries\n", .{});
+    std.debug.print("Async Queue Summary:\n", .{});
+    std.debug.print("  - Bounded queue allocated during initialization\n", .{});
+    std.debug.print("  - Batched writes drained by explicit flush points\n", .{});
     std.debug.print("  - Pre-formatted JSON in caller thread\n", .{});
     std.debug.print("  - Memory-safe: no dangling pointers\n", .{});
-    std.debug.print("  - Zero allocation in hot path\n", .{});
+    std.debug.print("  - Zero allocation in the hot path\n", .{});
 }

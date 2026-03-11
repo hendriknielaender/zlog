@@ -1,26 +1,7 @@
 const std = @import("std");
 const zbench = @import("zbench");
 const zlog = @import("zlog");
-
-// Null writer for performance testing without I/O overhead
-const NullWriter = struct {
-    const Self = @This();
-    const Error = error{};
-    const Writer = std.io.GenericWriter(*Self, Error, write);
-
-    pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
-    }
-
-    pub fn deprecatedWriter(self: *Self) Writer {
-        return self.writer();
-    }
-
-    fn write(self: *Self, bytes: []const u8) Error!usize {
-        _ = self;
-        return bytes.len;
-    }
-};
+const NullWriter = @import("writers.zig").NullWriter;
 
 // Global allocator for benchmarks
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -28,7 +9,7 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 fn benchmarkJsonFormat(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
@@ -43,7 +24,7 @@ fn benchmarkJsonFormat(allocator: std.mem.Allocator) void {
 fn benchmarkSimpleLogging(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
@@ -57,12 +38,17 @@ fn benchmarkSimpleLogging(allocator: std.mem.Allocator) void {
 fn benchmarkLargeFields(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
 
     // Create large data payload
-    const large_data = "This is a very long string that represents a large data payload that might be logged in production systems. It contains detailed information about the operation, user context, system state, and various metadata that could be relevant for debugging and monitoring purposes.";
+    const large_data =
+        "This is a very long string that represents a large data payload that " ++
+        "might be logged in production systems. It contains detailed " ++
+        "information about the operation, user context, system state, and " ++
+        "various metadata that could be relevant for debugging and " ++
+        "monitoring purposes.";
 
     const fields = [_]zlog.Field{
         zlog.field.string("user_id", "12345"),
@@ -77,7 +63,7 @@ fn benchmarkLargeFields(allocator: std.mem.Allocator) void {
 fn benchmarkManyFields(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
 
@@ -107,7 +93,7 @@ fn benchmarkManyFields(allocator: std.mem.Allocator) void {
 fn benchmarkNumericFields(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
@@ -125,7 +111,7 @@ fn benchmarkNumericFields(allocator: std.mem.Allocator) void {
 fn benchmarkMixedFields(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
@@ -145,7 +131,7 @@ fn benchmarkMixedFields(allocator: std.mem.Allocator) void {
 fn benchmarkErrorLogging(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
@@ -163,7 +149,7 @@ fn benchmarkErrorLogging(allocator: std.mem.Allocator) void {
 fn benchmarkHighThroughput(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
@@ -183,7 +169,7 @@ fn benchmarkHighThroughput(allocator: std.mem.Allocator) void {
 fn benchmarkMinimalLogging(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
@@ -196,7 +182,7 @@ fn benchmarkMinimalLogging(allocator: std.mem.Allocator) void {
 fn benchmarkNoFields(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{};
@@ -207,7 +193,7 @@ fn benchmarkNoFields(allocator: std.mem.Allocator) void {
 fn benchmarkLongMessage(allocator: std.mem.Allocator) void {
     _ = allocator;
     var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(null_writer.deprecatedWriter().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
 
     const trace_ctx = zlog.TraceContext.init(true);
     const fields = [_]zlog.Field{
@@ -215,13 +201,19 @@ fn benchmarkLongMessage(allocator: std.mem.Allocator) void {
         zlog.field.uint("length", 512),
     };
 
-    const long_message = "This is a very long log message that simulates real-world scenarios where applications might log detailed information about operations, errors, or state changes. In production systems, such messages often contain comprehensive context that helps developers and operators understand what happened, when it happened, and what the system state was at the time. This type of detailed logging is crucial for debugging complex distributed systems.";
+    const long_message =
+        "This is a very long log message that simulates real-world scenarios " ++
+        "where applications might log detailed information about operations, " ++
+        "errors, or state changes. In production systems, such messages often " ++
+        "contain comprehensive context that helps developers and operators " ++
+        "understand what happened, when it happened, and what the system " ++
+        "state was at the time. This type of detailed logging is crucial for " ++
+        "debugging complex distributed systems.";
 
     logger.infoWithTrace(long_message, trace_ctx, &fields);
 }
 
 pub fn main() !void {
-    const stdout = std.fs.File.stdout().deprecatedWriter();
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -230,8 +222,8 @@ pub fn main() !void {
     });
     defer bench.deinit();
 
-    try stdout.writeAll("=== Comprehensive zlog Performance Benchmarks ===\n\n");
-    try stdout.writeAll("Testing various logging scenarios and field configurations.\n\n");
+    std.debug.print("=== Comprehensive zlog Performance Benchmarks ===\n\n", .{});
+    std.debug.print("Testing various logging scenarios and field configurations.\n\n", .{});
 
     // Core formatting benchmarks
     try bench.add("json_format", benchmarkJsonFormat, .{});
@@ -262,17 +254,21 @@ pub fn main() !void {
     benchmarkLargeFields(allocator);
     std.debug.print("All benchmarks completed successfully.\n", .{});
 
-    try stdout.writeAll("\n=== Analysis ===\n");
-    try stdout.writeAll("• json_format: Standard structured logging with common fields\n");
-    try stdout.writeAll("• simple_logging: Basic logging with minimal overhead\n");
-    try stdout.writeAll("• large_fields: Impact of large string values\n");
-    try stdout.writeAll("• many_fields: Performance with high field count\n");
-    try stdout.writeAll("• numeric_fields: Numeric field formatting performance\n");
-    try stdout.writeAll("• mixed_fields: Combination of different field types\n");
-    try stdout.writeAll("• error_logging: Error-level logging patterns\n");
-    try stdout.writeAll("• high_throughput: Burst logging performance\n");
-    try stdout.writeAll("• minimal_logging: Absolute minimum overhead\n");
-    try stdout.writeAll("• no_fields: Message-only logging\n");
-    try stdout.writeAll("• long_message: Large message content impact\n");
-    try stdout.writeAll("\nThese benchmarks help identify performance characteristics across different usage patterns.\n");
+    std.debug.print("\n=== Analysis ===\n", .{});
+    std.debug.print("• json_format: Standard structured logging with common fields\n", .{});
+    std.debug.print("• simple_logging: Basic logging with minimal overhead\n", .{});
+    std.debug.print("• large_fields: Impact of large string values\n", .{});
+    std.debug.print("• many_fields: Performance with high field count\n", .{});
+    std.debug.print("• numeric_fields: Numeric field formatting performance\n", .{});
+    std.debug.print("• mixed_fields: Combination of different field types\n", .{});
+    std.debug.print("• error_logging: Error-level logging patterns\n", .{});
+    std.debug.print("• high_throughput: Burst logging performance\n", .{});
+    std.debug.print("• minimal_logging: Absolute minimum overhead\n", .{});
+    std.debug.print("• no_fields: Message-only logging\n", .{});
+    std.debug.print("• long_message: Large message content impact\n", .{});
+    std.debug.print(
+        "\nThese benchmarks help identify performance characteristics across " ++
+            "different usage patterns.\n",
+        .{},
+    );
 }

@@ -335,31 +335,54 @@ pub const OTel = struct {
 /// Common field combinations for typical use cases
 pub const CommonFields = struct {
     /// HTTP request logging fields
-    pub fn httpRequest(method: []const u8, url: []const u8, status_code: u16, user_agent: ?[]const u8) [4]field.Field {
+    pub fn httpRequest(
+        method: []const u8,
+        url: []const u8,
+        status_code: u16,
+        user_agent: ?[]const u8,
+    ) [4]field.Field {
         return [_]field.Field{
             OTel.httpMethod(method),
             OTel.httpUrl(url),
             OTel.httpStatusCode(status_code),
-            if (user_agent) |ua| OTel.httpUserAgent(ua) else field.Field.null_value(SemanticConventions.HTTP_USER_AGENT),
+            if (user_agent) |ua|
+                OTel.httpUserAgent(ua)
+            else
+                field.Field.null_value(SemanticConventions.HTTP_USER_AGENT),
         };
     }
 
     /// Database operation logging fields
-    pub fn dbOperation(system: []const u8, name: []const u8, operation: []const u8, statement: ?[]const u8) [4]field.Field {
+    pub fn dbOperation(
+        system: []const u8,
+        name: []const u8,
+        operation: []const u8,
+        statement: ?[]const u8,
+    ) [4]field.Field {
         return [_]field.Field{
             OTel.dbSystem(system),
             OTel.dbName(name),
             OTel.dbOperation(operation),
-            if (statement) |stmt| OTel.dbStatement(stmt) else field.Field.null_value(SemanticConventions.DB_STATEMENT),
+            if (statement) |stmt|
+                OTel.dbStatement(stmt)
+            else
+                field.Field.null_value(SemanticConventions.DB_STATEMENT),
         };
     }
 
     /// Error logging fields
-    pub fn errorInfo(error_type: []const u8, message: []const u8, stacktrace: ?[]const u8) [3]field.Field {
+    pub fn errorInfo(
+        error_type: []const u8,
+        message: []const u8,
+        stacktrace: ?[]const u8,
+    ) [3]field.Field {
         return [_]field.Field{
             OTel.errorType(error_type),
             OTel.errorMessage(message),
-            if (stacktrace) |st| OTel.exceptionStacktrace(st) else field.Field.null_value(SemanticConventions.EXCEPTION_STACKTRACE),
+            if (stacktrace) |st|
+                OTel.exceptionStacktrace(st)
+            else
+                field.Field.null_value(SemanticConventions.EXCEPTION_STACKTRACE),
         };
     }
 
@@ -367,8 +390,14 @@ pub const CommonFields = struct {
     pub fn userContext(user_id: []const u8, name: ?[]const u8, email: ?[]const u8) [3]field.Field {
         return [_]field.Field{
             OTel.userId(user_id),
-            if (name) |n| OTel.userName(n) else field.Field.null_value(SemanticConventions.USER_NAME),
-            if (email) |e| OTel.userEmail(e) else field.Field.null_value(SemanticConventions.USER_EMAIL),
+            if (name) |n|
+                OTel.userName(n)
+            else
+                field.Field.null_value(SemanticConventions.USER_NAME),
+            if (email) |e|
+                OTel.userEmail(e)
+            else
+                field.Field.null_value(SemanticConventions.USER_EMAIL),
         };
     }
 };
@@ -397,7 +426,12 @@ test "Common field combinations" {
     try testing.expect(http_fields[2].value.uint == 200);
     try testing.expectEqualStrings("Mozilla/5.0", http_fields[3].value.string);
 
-    const db_fields = CommonFields.dbOperation("postgresql", "users_db", "SELECT", "SELECT * FROM users");
+    const db_fields = CommonFields.dbOperation(
+        "postgresql",
+        "users_db",
+        "SELECT",
+        "SELECT * FROM users",
+    );
     try testing.expect(db_fields.len == 4);
     try testing.expectEqualStrings("postgresql", db_fields[0].value.string);
     try testing.expectEqualStrings("users_db", db_fields[1].value.string);

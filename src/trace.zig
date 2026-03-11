@@ -92,8 +92,10 @@ pub const TraceContext = struct {
         var child_span_hex_buf: [16]u8 = undefined;
         var parent_span_hex_buf: [16]u8 = undefined;
 
-        _ = bytes_to_hex_lowercase(&child_parent_id, &child_span_hex_buf) catch @panic("hex conversion failed with correct buffer size");
-        _ = bytes_to_hex_lowercase(&self.parent_id, &parent_span_hex_buf) catch @panic("hex conversion failed with correct buffer size");
+        _ = bytes_to_hex_lowercase(&child_parent_id, &child_span_hex_buf) catch
+            @panic("hex conversion failed with correct buffer size");
+        _ = bytes_to_hex_lowercase(&self.parent_id, &parent_span_hex_buf) catch
+            @panic("hex conversion failed with correct buffer size");
 
         const child_trace_context = TraceContext{
             .version = self.version,
@@ -109,6 +111,34 @@ pub const TraceContext = struct {
         assert(!std.mem.eql(u8, &child_trace_context.parent_id, &self.parent_id));
         assert(!is_all_zero_id(child_trace_context.parent_id[0..]));
         return child_trace_context;
+    }
+
+    pub fn withParentId(self: *const TraceContext, parent_id: [8]u8) TraceContext {
+        assert(self.version == 0x00);
+        assert(!is_all_zero_id(self.trace_id[0..]));
+        assert(!is_all_zero_id(parent_id[0..]));
+
+        var span_id_hexadecimal_buffer: [16]u8 = undefined;
+        var parent_span_hexadecimal_buffer: [16]u8 = undefined;
+
+        _ = bytes_to_hex_lowercase(&parent_id, &span_id_hexadecimal_buffer) catch
+            @panic("hex conversion failed with correct buffer size");
+        _ = bytes_to_hex_lowercase(&self.parent_id, &parent_span_hexadecimal_buffer) catch
+            @panic("hex conversion failed with correct buffer size");
+
+        const trace_context_result = TraceContext{
+            .version = self.version,
+            .trace_id = self.trace_id,
+            .parent_id = parent_id,
+            .trace_flags = self.trace_flags,
+            .trace_id_hex = self.trace_id_hex,
+            .span_id_hex = span_id_hexadecimal_buffer,
+            .parent_span_hex = parent_span_hexadecimal_buffer,
+        };
+
+        assert(std.mem.eql(u8, &trace_context_result.trace_id, &self.trace_id));
+        assert(!is_all_zero_id(trace_context_result.parent_id[0..]));
+        return trace_context_result;
     }
 };
 
@@ -169,7 +199,11 @@ pub fn extract_short_from_trace_id(trace_id: [16]u8) u64 {
         (@as(u64, trace_id[14]) << 8) |
         @as(u64, trace_id[15]);
 
-    assert(short_id > 0 or !is_all_zero_id(trace_id[0..8]));
+    if (short_id == 0) {
+        assert(!is_all_zero_id(trace_id[0..8]));
+    } else {
+        assert(short_id > 0);
+    }
     return short_id;
 }
 
@@ -251,6 +285,16 @@ test "TraceContext createChild maintains trace_id" {
     try testing.expect(child_ctx.trace_flags.sampled == false);
     try testing.expect(child_ctx.parent_span_hex != null);
     try testing.expect(!is_all_zero_id(child_ctx.parent_id[0..]));
+}
+
+test "TraceContext.withParentId rewrites active span" {
+    const parent_ctx = TraceContext.init(true);
+    const child_ctx = parent_ctx.createChild(true);
+    const restored_ctx = child_ctx.withParentId(parent_ctx.parent_id);
+
+    try testing.expect(std.mem.eql(u8, &restored_ctx.trace_id, &parent_ctx.trace_id));
+    try testing.expect(std.mem.eql(u8, &restored_ctx.parent_id, &parent_ctx.parent_id));
+    try testing.expect(restored_ctx.parent_span_hex != null);
 }
 
 test "generate_trace_id produces valid IDs" {

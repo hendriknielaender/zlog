@@ -1,5 +1,4 @@
 const std = @import("std");
-const xev = @import("xev");
 
 pub const config = @import("config.zig");
 const field_mod = @import("field.zig");
@@ -9,7 +8,6 @@ pub const redaction = @import("redaction.zig");
 pub const event = @import("event.zig");
 pub const logger = @import("logger.zig");
 pub const otel = @import("otel.zig");
-pub const EventLoop = @import("event_loop.zig").EventLoop;
 pub const otel_logger = @import("otel_logger.zig");
 pub const otlp_exporter = @import("otlp_exporter.zig");
 pub const semantic_conventions = @import("semantic_conventions.zig");
@@ -27,6 +25,7 @@ pub const TaskContext = correlation.TaskContext;
 pub const Span = correlation.Span;
 pub const getCurrentTaskContext = correlation.getCurrentTaskContext;
 pub const setTaskContext = correlation.setTaskContext;
+pub const clearTaskContext = correlation.clearTaskContext;
 pub const createChildTaskContext = correlation.createChildTaskContext;
 
 pub const RedactionOptions = redaction.RedactionOptions;
@@ -50,140 +49,50 @@ pub const SemanticConventions = semantic_conventions.SemanticConventions;
 pub const SemConv = semantic_conventions.OTel;
 pub const CommonFields = semantic_conventions.CommonFields;
 
-/// Create default async logger with managed event loop
-pub fn default(memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = true }) {
-    const stderr_file = std.fs.File.stderr();
-    const stderr_any_writer = stderr_file.deprecatedWriter().any();
-
-    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
-    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
-    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-
-    const async_logger_result = try Logger(.{ .async_mode = true }).initAsync(stderr_any_writer, memory_allocator);
+pub fn default(
+    output_writer: anytype,
+    async_state: *Logger(.{ .async_mode = true }).AsyncState,
+) Logger(.{ .async_mode = true }) {
+    const async_logger_result = Logger(.{ .async_mode = true }).initAsync(output_writer, async_state);
     std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
     return async_logger_result;
 }
 
-/// Create default async logger with custom event loop (advanced usage)
-pub fn defaultWithEventLoop(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !Logger(.{ .async_mode = true }) {
-    const stderr_file = std.fs.File.stderr();
-    const stderr_any_writer = stderr_file.deprecatedWriter().any();
-
-    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
-    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
-    std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
-    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-
-    const async_logger_result = try Logger(.{ .async_mode = true }).initAsyncWithEventLoop(stderr_any_writer, event_loop_ptr, memory_allocator);
-    std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
-    return async_logger_result;
-}
-
-/// Create logger with custom configuration using managed event loop
-pub fn loggerWithConfig(comptime custom_config: Config, output_writer: std.io.AnyWriter, memory_allocator: std.mem.Allocator) !Logger(custom_config) {
-    comptime {
-        std.debug.assert(custom_config.max_fields > 0);
-        std.debug.assert(custom_config.buffer_size >= 256);
-        if (custom_config.async_mode) {
-            std.debug.assert(custom_config.async_queue_size > 0);
-        }
-    }
-
-    std.debug.assert(@TypeOf(output_writer) == std.io.AnyWriter);
-    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-
-    if (custom_config.async_mode) {
-        const async_logger_result = try Logger(custom_config).initAsync(output_writer, memory_allocator);
-        std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
-        return async_logger_result;
-    } else {
-        const sync_logger_result = Logger(custom_config).init(output_writer);
-        std.debug.assert(@intFromEnum(sync_logger_result.level) <= @intFromEnum(Level.fatal));
-        return sync_logger_result;
-    }
-}
-
-/// Create logger with custom configuration using external event loop (advanced usage)
-pub fn loggerWithConfigAndEventLoop(comptime custom_config: Config, output_writer: std.io.AnyWriter, event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !Logger(custom_config) {
-    comptime {
-        std.debug.assert(custom_config.max_fields > 0);
-        std.debug.assert(custom_config.buffer_size >= 256);
-        if (custom_config.async_mode) {
-            std.debug.assert(custom_config.async_queue_size > 0);
-        }
-    }
-
-    std.debug.assert(@TypeOf(output_writer) == std.io.AnyWriter);
-    std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
-    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-
-    if (custom_config.async_mode) {
-        const async_logger_result = try Logger(custom_config).initAsyncWithEventLoop(output_writer, event_loop_ptr, memory_allocator);
-        std.debug.assert(@intFromEnum(async_logger_result.level) <= @intFromEnum(Level.fatal));
-        return async_logger_result;
-    } else {
-        const sync_logger_result = Logger(custom_config).init(output_writer);
-        std.debug.assert(@intFromEnum(sync_logger_result.level) <= @intFromEnum(Level.fatal));
-        return sync_logger_result;
-    }
-}
-
-pub fn loggerWithRedaction(comptime redaction_options: RedactionOptions) LoggerWithRedaction(.{}, redaction_options) {
-    const stderr_file = std.fs.File.stderr();
-    const stderr_any_writer = stderr_file.deprecatedWriter().any();
-
-    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
-    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
-
-    const logger_result = LoggerWithRedaction(.{}, redaction_options).init(stderr_any_writer);
+pub fn loggerWithRedaction(
+    comptime redaction_options: RedactionOptions,
+    output_writer: anytype,
+) LoggerWithRedaction(.{}, redaction_options) {
+    const logger_result = LoggerWithRedaction(.{}, redaction_options).init(output_writer);
     std.debug.assert(@intFromEnum(logger_result.level) <= @intFromEnum(Level.fatal));
     return logger_result;
 }
 
-/// Create an OpenTelemetry-compliant logger with managed event loop (async only)
-pub fn otelLogger(memory_allocator: std.mem.Allocator) !OTelLogger(.{ .base_config = .{ .async_mode = true } }) {
-    const stderr_file = std.fs.File.stderr();
-    const stderr_any_writer = stderr_file.deprecatedWriter().any();
-
-    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
-    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
-    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-
-    const async_logger_result = try OTelLogger(.{ .base_config = .{ .async_mode = true } }).initAsync(stderr_any_writer, memory_allocator);
+pub fn otelLogger(
+    output_writer: anytype,
+    async_state: *OTelLogger(.{ .base_config = .{ .async_mode = true } }).AsyncState,
+) OTelLogger(.{ .base_config = .{ .async_mode = true } }) {
+    const async_logger_result = OTelLogger(
+        .{ .base_config = .{ .async_mode = true } },
+    ).initAsync(output_writer, async_state);
     return async_logger_result;
 }
 
-/// Create an OpenTelemetry-compliant logger with custom event loop (async only)
-pub fn otelLoggerWithEventLoop(event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !OTelLogger(.{ .base_config = .{ .async_mode = true } }) {
-    const stderr_file = std.fs.File.stderr();
-    const stderr_any_writer = stderr_file.deprecatedWriter().any();
-
-    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
-    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
-    std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
-    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-
-    const async_logger_result = try OTelLogger(.{ .base_config = .{ .async_mode = true } }).initAsyncWithEventLoop(stderr_any_writer, event_loop_ptr, memory_allocator);
-    return async_logger_result;
-}
-
-/// Create an OpenTelemetry-compliant logger with custom configuration (async only)
-pub fn otelLoggerWithConfig(comptime otel_config: OTelConfig, event_loop_ptr: *xev.Loop, memory_allocator: std.mem.Allocator) !OTelLogger(otel_config) {
+/// Create an OpenTelemetry-compliant logger with custom configuration (async only).
+pub fn otelLoggerWithConfig(
+    comptime otel_config: OTelConfig,
+    output_writer: anytype,
+    async_state: *OTelLogger(otel_config).AsyncState,
+) OTelLogger(otel_config) {
     comptime {
         if (!otel_config.base_config.async_mode) {
-            @compileError("otelLoggerWithConfig() requires async_mode = true in config. Async is the only supported mode for the ergonomic API.");
+            @compileError(
+                "otelLoggerWithConfig() requires async_mode = true in config. " ++
+                    "Async is the only supported mode for the ergonomic API.",
+            );
         }
     }
 
-    const stderr_file = std.fs.File.stderr();
-    const stderr_any_writer = stderr_file.deprecatedWriter().any();
-
-    std.debug.assert(@TypeOf(stderr_any_writer) == std.io.AnyWriter);
-    std.debug.assert(@TypeOf(stderr_file) == std.fs.File);
-    std.debug.assert(@TypeOf(event_loop_ptr.*) == xev.Loop);
-    std.debug.assert(@TypeOf(memory_allocator) == std.mem.Allocator);
-
-    const async_logger_result = try OTelLogger(otel_config).initAsync(stderr_any_writer, event_loop_ptr, memory_allocator);
+    const async_logger_result = OTelLogger(otel_config).initAsync(output_writer, async_state);
     return async_logger_result;
 }
 
@@ -196,59 +105,102 @@ pub const bytesToHex = trace.bytes_to_hex_lowercase;
 pub const field = field_mod.Field;
 
 const testing = std.testing;
+const test_output_capacity = 64 * 1024;
+
+const TestOutput = struct {
+    storage: [test_output_capacity]u8 = undefined,
+    writer: std.Io.Writer = undefined,
+
+    fn init() TestOutput {
+        var output = TestOutput{};
+        output.writer = std.Io.Writer.fixed(&output.storage);
+        return output;
+    }
+
+    fn written(self: *TestOutput) []const u8 {
+        return self.writer.buffered();
+    }
+};
+
+fn expectContains(haystack: []const u8, needle: []const u8) !void {
+    try testing.expect(std.mem.containsAtLeast(u8, haystack, 1, needle));
+}
+
+fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
+    try testing.expect(!std.mem.containsAtLeast(u8, haystack, 1, needle));
+}
 
 test "JSON serialization with basic message" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{}).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
     log.info("Test message", &.{});
 
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"INFO\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Test message\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"trace\":"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"span\":"));
+    try expectContains(buffer.written(), "\"level\":\"INFO\"");
+    try expectContains(buffer.written(), "\"msg\":\"Test message\"");
+    try expectContains(buffer.written(), "\"trace\":");
+    try expectContains(buffer.written(), "\"span\":");
 }
 
 test "JSON serialization with multiple fields" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{}).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
     log.info("Test message", &.{
         Field.string("key1", "value1"),
         Field.int("key2", 42),
         Field.float("key3", 3.14),
     });
 
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"INFO\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Test message\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"key1\":\"value1\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"key2\":42"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"key3\":3.14"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"trace\":"));
+    try expectContains(buffer.written(), "\"level\":\"INFO\"");
+    try expectContains(buffer.written(), "\"msg\":\"Test message\"");
+    try expectContains(buffer.written(), "\"key1\":\"value1\"");
+    try expectContains(buffer.written(), "\"key2\":42");
+    try expectContains(buffer.written(), "\"key3\":3.14");
+    try expectContains(buffer.written(), "\"trace\":");
 }
 
 test "JSON escaping in strings" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{}).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
     log.info("Message with \"quotes\" and \\backslash\\", &.{
         Field.string("special", "Line\nbreak\tand\rcarriage"),
     });
 
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"INFO\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Message with"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"special\":"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"trace\":"));
+    try expectContains(buffer.written(), "\"level\":\"INFO\"");
+    try expectContains(buffer.written(), "\"msg\":\"Message with");
+    try expectContains(buffer.written(), "\"special\":");
+    try expectContains(buffer.written(), "\"trace\":");
+}
+
+test "flush writes buffered file output" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("log.json", .{ .read = true });
+    defer file.close();
+
+    var file_buffer: [512]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+
+    var log = Logger(.{}).init(&file_writer);
+    defer log.deinit();
+
+    log.info("Buffered message", .{
+        .service = "writer-test",
+    });
+    try log.flush();
+
+    try file.seekTo(0);
+
+    var read_buffer: [512]u8 = undefined;
+    const read_count = try file.readAll(&read_buffer);
+    try testing.expect(read_count > 0);
+    try expectContains(read_buffer[0..read_count], "\"Buffered message\"");
+    try expectContains(read_buffer[0..read_count], "\"writer-test\"");
 }
 
 test "All field types" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{}).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
     log.info("All types", &.{
         Field.string("str", "hello"),
         Field.int("int", -42),
@@ -259,22 +211,20 @@ test "All field types" {
         Field.null_value("null_field"),
     });
 
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"INFO\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"All types\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"str\":\"hello\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"int\":-42"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"uint\":42"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"float\":3.14159"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"bool_true\":true"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"bool_false\":false"));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"null_field\":null"));
+    try expectContains(buffer.written(), "\"level\":\"INFO\"");
+    try expectContains(buffer.written(), "\"msg\":\"All types\"");
+    try expectContains(buffer.written(), "\"str\":\"hello\"");
+    try expectContains(buffer.written(), "\"int\":-42");
+    try expectContains(buffer.written(), "\"uint\":42");
+    try expectContains(buffer.written(), "\"float\":3.14159");
+    try expectContains(buffer.written(), "\"bool_true\":true");
+    try expectContains(buffer.written(), "\"bool_false\":false");
+    try expectContains(buffer.written(), "\"null_field\":null");
 }
 
 test "Level filtering" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{ .level = .warn }).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{ .level = .warn }).init(&buffer.writer);
 
     log.trace("Trace message", &.{});
     log.debug("Debug message", &.{});
@@ -284,34 +234,30 @@ test "Level filtering" {
     log.err("Error message", &.{});
     log.fatal("Fatal message", &.{});
 
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"WARN\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Warning message\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"ERROR\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Error message\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"FATAL\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Fatal message\""));
-    try testing.expect(!std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Trace message\""));
-    try testing.expect(!std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Debug message\""));
-    try testing.expect(!std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Info message\""));
+    try expectContains(buffer.written(), "\"level\":\"WARN\"");
+    try expectContains(buffer.written(), "\"msg\":\"Warning message\"");
+    try expectContains(buffer.written(), "\"level\":\"ERROR\"");
+    try expectContains(buffer.written(), "\"msg\":\"Error message\"");
+    try expectContains(buffer.written(), "\"level\":\"FATAL\"");
+    try expectContains(buffer.written(), "\"msg\":\"Fatal message\"");
+    try expectNotContains(buffer.written(), "\"msg\":\"Trace message\"");
+    try expectNotContains(buffer.written(), "\"msg\":\"Debug message\"");
+    try expectNotContains(buffer.written(), "\"msg\":\"Info message\"");
 }
 
 test "Empty fields array" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{}).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
     log.info("Empty fields", &.{});
 
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"INFO\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Empty fields\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"trace\":"));
+    try expectContains(buffer.written(), "\"level\":\"INFO\"");
+    try expectContains(buffer.written(), "\"msg\":\"Empty fields\"");
+    try expectContains(buffer.written(), "\"trace\":");
 }
 
 test "Field limit enforcement" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{ .max_fields = 3 }).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{ .max_fields = 3 }).init(&buffer.writer);
 
     var fields: [5]Field = undefined;
     inline for (0..5) |i| {
@@ -320,38 +266,36 @@ test "Field limit enforcement" {
 
     log.info("Limited fields", &fields);
 
-    const output = buffer.items;
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"field0\":0"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"field1\":1"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"field2\":2"));
+    const output = buffer.written();
+    try expectContains(output, "\"field0\":0");
+    try expectContains(output, "\"field1\":1");
+    try expectContains(output, "\"field2\":2");
 }
 
 test "Control characters escaping" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
 
-    var log = Logger(.{}).init(buffer.writer().any());
-
-    const test_string = "Bell:\x07 Backspace:\x08 Tab:\t Newline:\n FormFeed:\x0C Return:\r Escape:\x1B";
+    const test_string =
+        "Bell:\x07 Backspace:\x08 Tab:\t Newline:\n FormFeed:\x0C " ++
+        "Return:\r Escape:\x1B";
     log.info("Control test", &.{
         Field.string("control_chars", test_string),
     });
 
-    const output = buffer.items;
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\\u0007"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\\b"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\\t"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\\n"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\\f"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\\r"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\\u001b"));
+    const output = buffer.written();
+    try expectContains(output, "\\u0007");
+    try expectContains(output, "\\b");
+    try expectContains(output, "\\t");
+    try expectContains(output, "\\n");
+    try expectContains(output, "\\f");
+    try expectContains(output, "\\r");
+    try expectContains(output, "\\u001b");
 }
 
 test "All log levels" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{ .level = .trace }).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{ .level = .trace }).init(&buffer.writer);
 
     log.trace("Trace msg", &.{});
     log.debug("Debug msg", &.{});
@@ -360,33 +304,43 @@ test "All log levels" {
     log.err("Error msg", &.{});
     log.fatal("Fatal msg", &.{});
 
-    const output = buffer.items;
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"level\":\"TRACE\""));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"level\":\"DEBUG\""));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"level\":\"INFO\""));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"level\":\"WARN\""));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"level\":\"ERROR\""));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"level\":\"FATAL\""));
+    const output = buffer.written();
+    try expectContains(output, "\"level\":\"TRACE\"");
+    try expectContains(output, "\"level\":\"DEBUG\"");
+    try expectContains(output, "\"level\":\"INFO\"");
+    try expectContains(output, "\"level\":\"WARN\"");
+    try expectContains(output, "\"level\":\"ERROR\"");
+    try expectContains(output, "\"level\":\"FATAL\"");
 }
 
 test "Large message within buffer" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{ .buffer_size = 1024 }).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{ .buffer_size = 1024 }).init(&buffer.writer);
 
     const large_msg = "A" ** 500;
     log.info(large_msg, &.{});
 
-    const output = buffer.items;
+    const output = buffer.written();
     try testing.expect(std.mem.containsAtLeast(u8, output, 1, large_msg));
 }
 
-test "Unicode characters" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
+test "Escaped overflow increments dropped metrics" {
+    var buffer = TestOutput.init();
+    var log = Logger(.{ .buffer_size = 256 }).init(&buffer.writer);
 
-    var log = Logger(.{}).init(buffer.writer().any());
+    const oversized_message = "\"" ** 180;
+    log.info(oversized_message, .{});
+
+    const metrics = log.getMetrics();
+    try testing.expect(metrics.logs_written == 0);
+    try testing.expect(metrics.logs_dropped == 1);
+    try testing.expect(metrics.write_failures == 0);
+    try testing.expect(buffer.written().len == 0);
+}
+
+test "Unicode characters" {
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
 
     log.info("Unicode test", &.{
         Field.string("emoji", "🦎"),
@@ -394,42 +348,66 @@ test "Unicode characters" {
         Field.string("special", "café"),
     });
 
-    const output = buffer.items;
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "🦎"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "你好"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "café"));
+    const output = buffer.written();
+    try expectContains(output, "🦎");
+    try expectContains(output, "你好");
+    try expectContains(output, "café");
+}
+
+test "Span lifecycle keeps task context in sync" {
+    correlation.clearTaskContext();
+    defer correlation.clearTaskContext();
+
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
+
+    const request_span = log.spanStart("request", .{ .endpoint = "/checkout" });
+    var current_context = correlation.getCurrentTaskContext();
+    try testing.expect(current_context.currentSpan() != null);
+
+    const db_span = log.spanStart("db", .{ .table = "orders" });
+    current_context = correlation.getCurrentTaskContext();
+    try testing.expect(current_context.currentSpan() != null);
+    try testing.expect(db_span.parent_id.? == request_span.id);
+
+    log.spanEnd(db_span, .{ .rows = 1 });
+    current_context = correlation.getCurrentTaskContext();
+    try testing.expect(current_context.currentSpan() != null);
+    try testing.expect(std.mem.eql(
+        u8,
+        &current_context.currentSpan().?,
+        &request_span.getSpanIdBytes(),
+    ));
+
+    log.spanEnd(request_span, .{ .status_code = 200 });
+    current_context = correlation.getCurrentTaskContext();
+    try testing.expect(current_context.currentSpan() == null);
 }
 
 test "Default logger creation" {
-    const test_allocator = testing.allocator;
-    // Event loop now managed internally
-    // Loop deinit handled by logger
-
-    var log = try default(test_allocator);
-    defer log.deinitWithAllocator(test_allocator);
+    var output = TestOutput.init();
+    var async_state = Logger(.{ .async_mode = true }).AsyncState{};
+    var log = default(&output.writer, &async_state);
+    defer log.deinit();
 }
 
 test "Custom configuration" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
+    var buffer = TestOutput.init();
     const custom_config = Config{
         .level = .debug,
         .max_fields = 10,
         .buffer_size = 2048,
     };
 
-    var log = Logger(custom_config).init(buffer.writer().any());
+    var log = Logger(custom_config).init(&buffer.writer);
     log.debug("Custom config test", &.{});
 
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"level\":\"DEBUG\""));
+    try expectContains(buffer.written(), "\"level\":\"DEBUG\"");
 }
 
 test "Field convenience functions" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var log = Logger(.{}).init(buffer.writer().any());
+    var buffer = TestOutput.init();
+    var log = Logger(.{}).init(&buffer.writer);
 
     log.info("Field test", &.{
         Field.string("name", "test"),
@@ -440,56 +418,39 @@ test "Field convenience functions" {
         Field.null_value("empty"),
     });
 
-    const output = buffer.items;
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"name\":\"test\""));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"count\":-123"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"size\":456"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"ratio\":1.23"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"active\":true"));
-    try testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"empty\":null"));
+    const output = buffer.written();
+    try expectContains(output, "\"name\":\"test\"");
+    try expectContains(output, "\"count\":-123");
+    try expectContains(output, "\"size\":456");
+    try expectContains(output, "\"ratio\":1.23");
+    try expectContains(output, "\"active\":true");
+    try expectContains(output, "\"empty\":null");
 }
 
 test "Async logger creation and basic functionality" {
-    const test_allocator = testing.allocator;
-
-    var buffer = std.array_list.Managed(u8).init(test_allocator);
-    defer buffer.deinit();
-
-    var async_log = try Logger(.{ .async_mode = true }).initAsync(
-        buffer.writer().any(),
-        test_allocator,
-    );
-    defer async_log.deinitWithAllocator(test_allocator);
+    var buffer = TestOutput.init();
+    var async_state = Logger(.{ .async_mode = true }).AsyncState{};
+    var async_log = Logger(.{ .async_mode = true }).initAsync(&buffer.writer, &async_state);
+    defer async_log.deinit();
 
     async_log.info("Async test message", &.{
         Field.string("type", "async"),
         Field.int("count", 1),
     });
 
-    // Process messages by running the managed event loop
-    for (0..5) |_| {
-        try async_log.runEventLoop();
-        std.Thread.sleep(5 * std.time.ns_per_ms);
-    }
+    async_log.drain();
+    try async_log.flush();
 
-    async_log.async_logger.?.flushPending();
-
-    try testing.expect(buffer.items.len > 0);
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"msg\":\"Async test message\""));
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 1, "\"type\":\"async\""));
+    try testing.expect(buffer.written().len > 0);
+    try expectContains(buffer.written(), "\"msg\":\"Async test message\"");
+    try expectContains(buffer.written(), "\"type\":\"async\"");
 }
 
 test "Async logger with high volume" {
-    const test_allocator = testing.allocator;
-
-    var buffer = std.array_list.Managed(u8).init(test_allocator);
-    defer buffer.deinit();
-
-    var async_log = try Logger(.{ .async_mode = true }).initAsync(
-        buffer.writer().any(),
-        test_allocator,
-    );
-    defer async_log.deinitWithAllocator(test_allocator);
+    var buffer = TestOutput.init();
+    var async_state = Logger(.{ .async_mode = true }).AsyncState{};
+    var async_log = Logger(.{ .async_mode = true }).initAsync(&buffer.writer, &async_state);
+    defer async_log.deinit();
 
     for (0..10) |i| {
         async_log.info("Bulk message", &.{
@@ -498,16 +459,16 @@ test "Async logger with high volume" {
         });
     }
 
-    // Process messages by running the managed event loop
-    for (0..5) |_| {
-        try async_log.runEventLoop();
-        std.Thread.sleep(5 * std.time.ns_per_ms);
-    }
+    async_log.drain();
+    try async_log.flush();
 
-    async_log.async_logger.?.flushPending();
-
-    try testing.expect(buffer.items.len > 0);
-    try testing.expect(std.mem.containsAtLeast(u8, buffer.items, 10, "\"msg\":\"Bulk message\""));
+    try testing.expect(buffer.written().len > 0);
+    try testing.expect(std.mem.containsAtLeast(
+        u8,
+        buffer.written(),
+        10,
+        "\"msg\":\"Bulk message\"",
+    ));
 }
 
 test "LogEvent creation" {
@@ -525,88 +486,92 @@ test "LogEvent creation" {
 }
 
 test "Async mode configuration validation" {
-    const test_allocator = testing.allocator;
-    // Event loop now managed internally
-    // Loop deinit handled by logger
-
-    var buffer = std.array_list.Managed(u8).init(test_allocator);
-    defer buffer.deinit();
-
+    var buffer = TestOutput.init();
     const async_config = Config{
         .async_mode = true,
         .async_queue_size = 1024,
         .batch_size = 16,
     };
 
-    var async_log = try Logger(async_config).initAsync(
-        buffer.writer().any(),
+    var async_state = Logger(async_config).AsyncState{};
+    var async_log = Logger(async_config).initAsync(&buffer.writer, &async_state);
+    defer async_log.deinit();
 
-        test_allocator,
-    );
-    defer async_log.deinitWithAllocator(test_allocator);
-
-    try testing.expect(async_log.async_logger != null);
+    try testing.expect(async_log.getMetrics().queue_size == 0);
 }
 
 test "Default async logger creation" {
-    const test_allocator = testing.allocator;
-    // Event loop now managed internally
-    // Loop deinit handled by logger
+    var buffer = TestOutput.init();
+    var default_state = Logger(.{ .async_mode = true }).AsyncState{};
+    var async_log = default(&buffer.writer, &default_state);
+    async_log.deinit();
 
-    var async_log = try default(test_allocator);
-    async_log.deinitWithAllocator(test_allocator); // Clean up first logger
-
-    var buffer = std.array_list.Managed(u8).init(test_allocator);
-    defer buffer.deinit();
-
-    async_log = try Logger(.{ .async_mode = true }).initAsync(
-        buffer.writer().any(),
-        test_allocator,
-    );
-    defer async_log.deinitWithAllocator(test_allocator);
+    var async_state = Logger(.{ .async_mode = true }).AsyncState{};
+    async_log = Logger(.{ .async_mode = true }).initAsync(&buffer.writer, &async_state);
+    defer async_log.deinit();
 
     async_log.info("Default async test", &.{});
-    async_log.async_logger.?.flushPending();
+    try async_log.flush();
+}
+
+test "OTel logger with custom config instantiates" {
+    const otel_config = comptime OTelConfig{
+        .base_config = .{
+            .async_mode = true,
+            .level = .debug,
+        },
+        .resource = Resource.init().withService("test-service", "1.0.0"),
+        .instrumentation_scope = InstrumentationScope.init("test-logger"),
+    };
+
+    var async_state = OTelLogger(otel_config).AsyncState{};
+    var output = TestOutput.init();
+
+    var otel_log = otelLoggerWithConfig(
+        otel_config,
+        &output.writer,
+        &async_state,
+    );
+    defer otel_log.deinit();
+
+    otel_log.info("async otel", .{ .component = "instantiation_test" });
+    otel_log.drain();
+    try otel_log.flush();
+    try expectContains(output.written(), "\"async otel\"");
 }
 
 test "RedactionConfig context pattern" {
-    const test_allocator = testing.allocator;
-
-    var log_output = std.array_list.Managed(u8).init(test_allocator);
-    defer log_output.deinit();
-
-    var redaction_cfg = RedactionConfig.init(test_allocator);
+    var log_output = TestOutput.init();
+    var redaction_storage: [8][]const u8 = undefined;
+    var redaction_cfg = RedactionConfig.init(&redaction_storage);
     defer redaction_cfg.deinit();
 
     try redaction_cfg.addKey("password");
     try redaction_cfg.addKey("apiKey");
 
-    var log = Logger(.{}).initWithRedaction(log_output.writer().any(), &redaction_cfg);
+    var log = Logger(.{}).initWithRedaction(&log_output.writer, &redaction_cfg);
 
     log.info("User action", &.{
         Field.string("user", "alice"),
         Field.string("password", "super_secret"),
     });
 
-    try testing.expect(std.mem.indexOf(u8, log_output.items, "alice") != null);
-    try testing.expect(std.mem.indexOf(u8, log_output.items, "super_secret") == null);
-    try testing.expect(std.mem.indexOf(u8, log_output.items, "[REDACTED:string]") != null);
+    try testing.expect(std.mem.indexOf(u8, log_output.written(), "alice") != null);
+    try testing.expect(std.mem.indexOf(u8, log_output.written(), "super_secret") == null);
+    try testing.expect(std.mem.indexOf(u8, log_output.written(), "[REDACTED:string]") != null);
 }
 
 test "Context-based redaction in action" {
-    const test_allocator = testing.allocator;
-
-    var redaction_cfg = RedactionConfig.init(test_allocator);
+    var redaction_storage: [8][]const u8 = undefined;
+    var redaction_cfg = RedactionConfig.init(&redaction_storage);
     defer redaction_cfg.deinit();
 
     try redaction_cfg.addKey("password");
     try redaction_cfg.addKey("api_key");
     try redaction_cfg.addKey("ssn");
 
-    var log_output = std.array_list.Managed(u8).init(test_allocator);
-    defer log_output.deinit();
-
-    var log = Logger(.{}).initWithRedaction(log_output.writer().any(), &redaction_cfg);
+    var log_output = TestOutput.init();
+    var log = Logger(.{}).initWithRedaction(&log_output.writer, &redaction_cfg);
 
     log.info("User login", &.{
         Field.string("username", "alice"),
@@ -614,7 +579,7 @@ test "Context-based redaction in action" {
         Field.string("ip", "192.168.1.1"),
     });
 
-    const output = log_output.items;
+    const output = log_output.written();
     try testing.expect(std.mem.indexOf(u8, output, "alice") != null);
     try testing.expect(std.mem.indexOf(u8, output, "192.168.1.1") != null);
     try testing.expect(std.mem.indexOf(u8, output, "secret123") == null);
@@ -622,16 +587,12 @@ test "Context-based redaction in action" {
 }
 
 test "Compile-time redaction - zero cost filtering" {
-    const test_allocator = testing.allocator;
-
     const CompileTimeLogger = LoggerWithRedaction(.{}, .{
         .redacted_fields = &.{ "password", "api_key", "secret" },
     });
 
-    var log_output = std.array_list.Managed(u8).init(test_allocator);
-    defer log_output.deinit();
-
-    var log = CompileTimeLogger.init(log_output.writer().any());
+    var log_output = TestOutput.init();
+    var log = CompileTimeLogger.init(&log_output.writer);
 
     log.info("Security test", &.{
         Field.string("username", "bob"),
@@ -640,7 +601,7 @@ test "Compile-time redaction - zero cost filtering" {
         Field.string("email", "bob@example.com"),
     });
 
-    const output = log_output.items;
+    const output = log_output.written();
     try testing.expect(std.mem.indexOf(u8, output, "bob") != null);
     try testing.expect(std.mem.indexOf(u8, output, "bob@example.com") != null);
     try testing.expect(std.mem.indexOf(u8, output, "compile_time_secret") == null);
@@ -649,9 +610,8 @@ test "Compile-time redaction - zero cost filtering" {
 }
 
 test "Hybrid redaction - compile-time + runtime" {
-    const test_allocator = testing.allocator;
-
-    var runtime_redaction = RedactionConfig.init(test_allocator);
+    var redaction_storage: [8][]const u8 = undefined;
+    var runtime_redaction = RedactionConfig.init(&redaction_storage);
     defer runtime_redaction.deinit();
     try runtime_redaction.addKey("runtime_secret");
     try runtime_redaction.addKey("dynamic_key");
@@ -660,10 +620,8 @@ test "Hybrid redaction - compile-time + runtime" {
         .redacted_fields = &.{ "password", "api_key" },
     });
 
-    var log_output = std.array_list.Managed(u8).init(test_allocator);
-    defer log_output.deinit();
-
-    var log = HybridLogger.initWithRedaction(log_output.writer().any(), &runtime_redaction);
+    var log_output = TestOutput.init();
+    var log = HybridLogger.initWithRedaction(&log_output.writer, &runtime_redaction);
 
     log.info("Hybrid test", &.{
         Field.string("username", "charlie"),
@@ -674,7 +632,7 @@ test "Hybrid redaction - compile-time + runtime" {
         Field.string("visible_field", "not_redacted"),
     });
 
-    const output = log_output.items;
+    const output = log_output.written();
     try testing.expect(std.mem.indexOf(u8, output, "charlie") != null);
     try testing.expect(std.mem.indexOf(u8, output, "not_redacted") != null);
     try testing.expect(std.mem.indexOf(u8, output, "compile_time_filtered") == null);
@@ -684,19 +642,16 @@ test "Hybrid redaction - compile-time + runtime" {
 }
 
 test "Convenience constructor for compile-time redaction" {
-    const test_allocator = testing.allocator;
-
-    var output = std.array_list.Managed(u8).init(test_allocator);
-    defer output.deinit();
+    var output = TestOutput.init();
 
     const log_factory = loggerWithRedaction(.{
         .redacted_fields = &.{ "token", "auth_header" },
-    });
+    }, &output.writer);
     _ = log_factory;
 
     var custom_log = LoggerWithRedaction(.{}, .{
         .redacted_fields = &.{ "token", "auth_header" },
-    }).init(output.writer().any());
+    }).init(&output.writer);
 
     custom_log.info("Auth flow", &.{
         Field.string("user", "admin"),
@@ -705,7 +660,7 @@ test "Convenience constructor for compile-time redaction" {
         Field.string("endpoint", "/api/login"),
     });
 
-    const result = output.items;
+    const result = output.written();
     try testing.expect(std.mem.indexOf(u8, result, "admin") != null);
     try testing.expect(std.mem.indexOf(u8, result, "/api/login") != null);
     try testing.expect(std.mem.indexOf(u8, result, "bearer_abc123") == null);

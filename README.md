@@ -2,12 +2,22 @@
 > Still work in progress.
 
 # zlog - structured logging for zig
-[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/LICENSE)
-![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/hendriknielaender/zlog)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md)
+[![MIT license][badge_license]][license_link]
+![GitHub code size in bytes][badge_code_size]
+[![PRs Welcome][badge_prs]][contributing_link]
 <img src="logo.png" alt="zlog logo" align="right" width="20%"/>
 
-zlog is a high-performance, zero-allocation structured logging library for Zig with full OpenTelemetry support. Designed for system-level applications requiring maximum performance and observability, zlog provides clean anonymous struct logging with comprehensive tracing capabilities.
+zlog is a high-performance structured logging library for Zig with full OpenTelemetry support.
+The synchronous formatting path avoids heap allocation, and async batching, redaction, and OTLP
+export use caller-owned bounded state. Designed for system-level applications requiring maximum
+performance and observability, zlog provides clean anonymous struct logging with comprehensive
+tracing capabilities.
+
+[badge_license]: https://img.shields.io/badge/license-MIT-blue.svg
+[badge_code_size]: https://img.shields.io/github/languages/code-size/hendriknielaender/zlog
+[badge_prs]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg
+[license_link]: https://github.com/hendriknielaender/zlog/blob/HEAD/LICENSE
+[contributing_link]: https://github.com/hendriknielaender/zlog/blob/HEAD/CONTRIBUTING.md
 
 ---
 
@@ -30,7 +40,8 @@ zlog is a high-performance, zero-allocation structured logging library for Zig w
 }
 ```
 
-> **Note**: libxev is automatically included as a dependency of zlog and managed internally. No need to import or manage event loops manually.
+> **Note**: zlog has no runtime dependency beyond Zig itself. Async logging uses caller-owned
+> bounded state and explicit `drain()` / `flush()` calls.
 
 2. Configure in `build.zig`:
 
@@ -46,9 +57,13 @@ const std = @import("std");
 const zlog = @import("zlog");
 
 pub fn main() !void {
-    // High-performance async logger with managed event loop
-    var logger = try zlog.default(std.heap.page_allocator);
-    defer logger.deinitWithAllocator(std.heap.page_allocator);
+    // Prefer std.fs.File.Writer so stdout/stderr stays buffered.
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    defer stderr_writer.interface.flush() catch {};
+
+    var logger = zlog.Logger(.{}).init(&stderr_writer);
+    defer logger.deinit();
     
     // Clean, ergonomic logging with anonymous structs
     logger.info("Service started", .{
@@ -71,8 +86,7 @@ pub fn main() !void {
         .status_code = 200,
     });
 
-    // Process async events (when using async logger)
-    try logger.runEventLoop();
+    try logger.flush();
 }
 ```
 
@@ -85,10 +99,7 @@ const std = @import("std");
 const zlog = @import("zlog");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
-    defer _ = gpa.deinit();
-
-    // Create async logger with managed event loop
+    // Create async logger with caller-owned bounded state.
     const config = zlog.Config{
         .async_mode = true,
         .async_queue_size = 1024,
@@ -96,9 +107,13 @@ pub fn main() !void {
         .enable_simd = true,
     };
 
-    const stdout = std.io.getStdOut().writer();
-    var logger = try zlog.Logger(config).initAsync(stdout.any(), gpa.allocator());
-    defer logger.deinitWithAllocator(gpa.allocator());
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    defer stdout_writer.interface.flush() catch {};
+
+    var async_state = zlog.Logger(config).AsyncState{};
+    var logger = zlog.Logger(config).initAsync(&stdout_writer, &async_state);
+    defer logger.deinit();
 
     const trace_ctx = zlog.TraceContext.init(true);
     
@@ -109,14 +124,13 @@ pub fn main() !void {
             zlog.field.string("service", "api"),
         });
         
-        // Process event loop periodically
+        // Drain queued writes periodically.
         if (i % 1000 == 0) {
-            try logger.runEventLoop();
+            logger.drain();
         }
     }
     
-    // Final flush
-    try logger.runEventLoop();
+    try logger.flush();
 }
 ```
 
@@ -133,12 +147,21 @@ const Config = zlog.Config{
     .enable_simd = true,       // Enable SIMD optimizations
 };
 
-// Async logger with managed event loop
-var logger = try zlog.Logger(Config).initAsync(writer, allocator);
-defer logger.deinitWithAllocator(allocator);
+var output_buffer: [4096]u8 = undefined;
+var output_writer = std.fs.File.stdout().writer(&output_buffer);
+defer output_writer.interface.flush() catch {};
 
-// Or sync logger (no event loop needed)
-var sync_logger = zlog.Logger(.{}).init(writer);
+// Async logger with caller-owned bounded state.
+var async_state = zlog.Logger(Config).AsyncState{};
+var logger = zlog.Logger(Config).initAsync(&output_writer, &async_state);
+defer logger.deinit();
+logger.drain();
+try logger.flush();
+
+// Or sync logger.
+var sync_logger = zlog.Logger(.{}).init(&output_writer);
+defer sync_logger.deinit();
+try sync_logger.flush();
 ```
 
 ## Anonymous Struct API
@@ -173,7 +196,7 @@ zlog provides a hybrid compile-time and runtime redaction system for sensitive d
 // Define sensitive fields at compile-time
 var logger = zlog.loggerWithRedaction(.{
     .redacted_fields = &.{ "password", "api_key", "ssn" },
-});
+}, writer);
 
 // These fields will be automatically redacted with zero runtime cost
 logger.info("User login", &.{
@@ -185,7 +208,8 @@ logger.info("User login", &.{
 ### Runtime Redaction (Dynamic)
 
 ```zig
-var redaction_config = zlog.RedactionConfig.init(allocator);
+var redaction_storage: [16][]const u8 = undefined;
+var redaction_config = zlog.RedactionConfig.init(&redaction_storage);
 defer redaction_config.deinit();
 
 try redaction_config.addKey("credit_card");
@@ -218,7 +242,7 @@ logger.fatal("Fatal error", &.{});     // Highest priority
 
 ## Performance Benchmarks
 
-zlog is designed for zero-allocation logging with exceptional performance:
+zlog is designed for zero-allocation synchronous logging and bounded-allocation async/export paths:
 
 ```bash
 # Run all benchmarks
@@ -236,7 +260,7 @@ zig build test
 
 ### Key Performance Features
 
-- **Zero Allocations**: No heap allocations during logging operations
+- **Zero Heap In Sync Hot Path**: Synchronous formatting avoids heap allocations
 - **SIMD Optimizations**: Vectorized string operations where available  
 - **Async Batching**: Intelligent batching with backpressure handling
 - **Pre-formatted Traces**: Hex strings generated once, reused efficiently
@@ -257,7 +281,16 @@ logger.infoWithTrace("Request processed", trace_ctx, .{
 
 Output:
 ```json
-{"level":"INFO","msg":"Request processed","trace":"a1b2c3d4e5f67890a1b2c3d4e5f67890","span":"1234567890abcdef","ts":1640995200000,"tid":12345,"service":"api","status_code":200}
+{
+  "level":"INFO",
+  "msg":"Request processed",
+  "trace":"a1b2c3d4e5f67890a1b2c3d4e5f67890",
+  "span":"1234567890abcdef",
+  "ts":1640995200000,
+  "tid":12345,
+  "service":"api",
+  "status_code":200
+}
 ```
 
 zlog provides full W3C Trace Context specification compliance:
@@ -273,7 +306,8 @@ const child_ctx = trace_ctx.createChild(true);
 const short_id = zlog.extract_short_from_trace_id(trace_ctx.trace_id);
 ```
 
-Pre-formatted hex strings eliminate per-log conversion overhead, crucial for ultra-high throughput scenarios.
+Pre-formatted hex strings eliminate per-log conversion overhead, which matters in ultra-high
+throughput scenarios.
 
 ## OpenTelemetry Support
 
@@ -286,12 +320,16 @@ const std = @import("std");
 const zlog = @import("zlog");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
-    defer _ = gpa.deinit();
+    // Create OpenTelemetry-compliant logger with caller-owned async state.
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    defer stdout_writer.interface.flush() catch {};
 
-    // Create OpenTelemetry-compliant logger with managed event loop
-    var otel_logger = try zlog.otelLogger(gpa.allocator());
-    defer otel_logger.deinitWithAllocator(gpa.allocator());
+    var async_state = zlog.OTelLogger(.{
+        .base_config = .{ .async_mode = true },
+    }).AsyncState{};
+    var otel_logger = zlog.otelLogger(&stdout_writer, &async_state);
+    defer otel_logger.deinit();
 
     // Log with OTel semantic conventions
     otel_logger.info("HTTP request received", .{
@@ -300,6 +338,8 @@ pub fn main() !void {
         .@"http.status_code" = 200,
         .@"http.user_agent" = "curl/7.68.0",
     });
+
+    try otel_logger.flush();
 }
 ```
 
@@ -323,24 +363,26 @@ const otel_config = zlog.OTelConfig{
     },
 };
 
-var otel_logger = try zlog.otelLoggerWithConfig(otel_config, allocator);
+var async_state = zlog.OTelLogger(otel_config).AsyncState{};
+var otel_logger = zlog.otelLoggerWithConfig(otel_config, writer, &async_state);
+defer otel_logger.deinit();
+otel_logger.drain();
+try otel_logger.flush();
 ```
 
 ### OTLP Export
 
-Export logs directly to OpenTelemetry collectors:
+Serialize OTLP payloads with caller-owned header storage and transport:
 
 ```zig
-const exporter = zlog.OTLPExporter.init(allocator, .{
-    .endpoint = "http://localhost:4318/v1/logs",
-    .headers = &.{
-        .{ .key = "Authorization", .value = "Bearer token123" },
-    },
-});
+var header_storage: [4]zlog.OTLPExporter.Header = undefined;
+var exporter = zlog.OTLPExporter.init("http://localhost:4318/v1/logs", &header_storage);
 defer exporter.deinit();
 
-// Export log records
-try exporter.export(&log_records);
+try exporter.setHeader("Authorization", "Bearer token123");
+
+// Serialize the OTLP JSON payload to your chosen transport or buffer.
+try exporter.exportLogs(writer, log_records);
 ```
 
 ### Semantic Conventions
@@ -393,40 +435,51 @@ logger.spanEnd(span, .{
 
 Output includes automatic span correlation:
 ```json
-{"level":"INFO","msg":"user_authentication","span_mark":"start","span_id":123,"task_id":456,"thread_id":789,"user_id":"12345","method":"oauth"}
-{"level":"INFO","msg":"user_authentication","span_mark":"end","span_id":123,"task_id":456,"thread_id":789,"duration_ns":100000000,"success":true,"token_type":"bearer"}
+{
+  "level":"INFO",
+  "msg":"user_authentication",
+  "span_mark":"start",
+  "span_id":123,
+  "task_id":456,
+  "thread_id":789,
+  "user_id":"12345",
+  "method":"oauth"
+}
+{
+  "level":"INFO",
+  "msg":"user_authentication",
+  "span_mark":"end",
+  "span_id":123,
+  "task_id":456,
+  "thread_id":789,
+  "duration_ns":100000000,
+  "success":true,
+  "token_type":"bearer"
+}
 ```
 
 ## Advanced Usage
 
-### Custom Event Loop Management
+### Explicit Queue Draining
 
-For advanced users who need to integrate with existing event loops:
+Async logging is a bounded queue with explicit draining:
 
 ```zig
-const xev = @import("xev"); // Only needed for advanced usage
 const zlog = @import("zlog");
 
-// Create your own event loop
-var loop = try xev.Loop.init(.{});
-defer loop.deinit();
+var async_state = zlog.Logger(.{ .async_mode = true }).AsyncState{};
+var logger = zlog.Logger(.{ .async_mode = true }).initAsync(writer, &async_state);
+defer logger.deinit();
 
-// Use the advanced API with custom event loop
-var logger = try zlog.Logger(.{ .async_mode = true }).initAsyncWithEventLoop(
-    writer, 
-    &loop, 
-    allocator
-);
-defer logger.deinit(); // No allocator needed since you manage the loop
-
-// You control the event loop
-try loop.run(.no_wait);
+// You control when the queue is drained.
+logger.drain();
+try logger.flush();
 ```
 
-### Managed vs Custom Event Loop
+### Drain vs Flush
 
-- **Managed (Recommended)**: Use `initAsync()` - zlog handles everything
-- **Custom (Advanced)**: Use `initAsyncWithEventLoop()` - you control the loop
+- `drain()`: move queued entries to the writer without flushing the writer itself.
+- `flush()`: drain the queue and flush the underlying writer.
 
 ## License
 

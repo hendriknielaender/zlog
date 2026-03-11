@@ -2,15 +2,11 @@
     .fingerprint = 0x55b82e332fb709da,
     .name = .zlog,
     .version = "0.3.0",
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .zbench = .{
-            .url = "git+https://github.com/hendriknielaender/zBench#a945e79374556f858d5077b1ab8440a8a87349c0",
-            .hash = "zbench-0.11.1-YTdc7zgmAQDtDcHPFwsLeawui27WjMLWmUwrfz7pIlB2",
-        },
-        .libxev = .{
-            .url = "git+https://github.com/mitchellh/libxev#9f785d202ddccf7a625e799250579253977978b6",
-            .hash = "libxev-0.0.0-86vtcx8dEwDfl6p4tGVxCygft8oOsggfba9JO-k28J2x",
+            .url = "https://github.com/hendriknielaender/zBench/archive/refs/tags/v0.12.0.tar.gz",
+            .hash = "zbench-0.11.1-YTdc7zkmAQBWI99esNFueJc9GuzK-KaU6Nfr1ZXhNGmc",
         },
     },
     .paths = .{
@@ -18,6 +14,7 @@
         "build.zig.zon",
         "src",
         "benchmarks",
+        "examples",
         "README.md",
     },
 }
