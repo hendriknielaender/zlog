@@ -48,8 +48,8 @@ pub const Config = struct {
     max_fields: u16 = 32,
     buffer_size: u32 = 4096,
     async_mode: bool = false, // Keep sync as default for backward compatibility
-    async_queue_size: u32 = 65536,
-    batch_size: u32 = 256,
+    async_queue_size: u32 = 1024,
+    batch_size: u32 = 32,
     enable_logging: bool = true,
     enable_simd: bool = true,
 };
@@ -88,8 +88,8 @@ test "Config default values" {
     try testing.expect(config.max_fields == 32);
     try testing.expect(config.buffer_size == 4096);
     try testing.expect(config.async_mode == false);
-    try testing.expect(config.async_queue_size == 65536);
-    try testing.expect(config.batch_size == 256);
+    try testing.expect(config.async_queue_size == 1024);
+    try testing.expect(config.batch_size == 32);
     try testing.expect(config.enable_logging == true);
     try testing.expect(config.enable_simd == true);
 }

@@ -108,7 +108,7 @@ pub const Resource = struct {
         // Auto-detect process information at runtime
         updated.process_pid = switch (@import("builtin").os.tag) {
             .linux => @intCast(std.os.linux.getpid()),
-            .windows => @intCast(std.os.windows.kernel32.GetCurrentProcessId()),
+            .windows => @intCast(std.os.windows.GetCurrentProcessId()),
             .macos => @intCast(std.c.getpid()),
             else => null,
         };
@@ -359,7 +359,9 @@ test "OTelConfig configuration" {
     var otel_config = OTelConfig{};
     otel_config = otel_config.withOTelFormat();
     otel_config = otel_config.withResource(Resource.init().withService("my-app", "2.1.0"));
-    otel_config = otel_config.withScope(InstrumentationScope.init("my-logger").withVersion("1.5.0"));
+    otel_config = otel_config.withScope(
+        InstrumentationScope.init("my-logger").withVersion("1.5.0"),
+    );
 
     try testing.expect(otel_config.enable_otel_format == true);
     try testing.expectEqualStrings("my-app", otel_config.resource.service_name);

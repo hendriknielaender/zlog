@@ -1,25 +1,12 @@
 const std = @import("std");
 const zlog = @import("zlog");
+const NullWriter = @import("writers.zig").NullWriter;
 
 pub fn main() !void {
     const N = 10_000;
     const buf_len = 1024;
 
-    // Null writer for I/O measurement
-    var null_writer = struct {
-        const Self = @This();
-        const Error = error{};
-        const Writer = std.io.Writer(*Self, Error, write);
-
-        pub fn writer(self: *Self) Writer {
-            return .{ .context = self };
-        }
-
-        fn write(self: *Self, bytes: []const u8) Error!usize {
-            _ = self;
-            return bytes.len;
-        }
-    }{};
+    var null_writer = NullWriter{};
 
     std.debug.print("=== Isolated Performance Analysis ===\n\n", .{});
 
@@ -28,13 +15,12 @@ pub fn main() !void {
     var serialize_ns: u64 = 0;
     for (0..N) |i| {
         var buf: [buf_len]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
-        const writer = fbs.writer();
+        var writer = std.Io.Writer.fixed(&buf);
 
         const t0 = std.time.nanoTimestamp();
 
         // Direct formatting
-        _ = formatLogRecord(writer, .info, "User action", &.{
+        _ = formatLogRecord(&writer, .info, "User action", &.{
             zlog.field.string("user_id", "12345"),
             zlog.field.string("action", "login"),
             zlog.field.int("ts", @intCast(i)),
@@ -49,11 +35,13 @@ pub fn main() !void {
     var write_ns: u64 = 0;
     var dummy: [buf_len]u8 = undefined;
     @memset(&dummy, 'x');
-    const dummy_json = "{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"ts\":1234}\n";
+    const dummy_json =
+        "{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\"," ++
+        "\"action\":\"login\",\"ts\":1234}\n";
 
     for (0..N) |_| {
         const t0 = std.time.nanoTimestamp();
-        _ = null_writer.writer().write(dummy_json) catch 0;
+        null_writer.writer.writeAll(dummy_json) catch {};
         const t1 = std.time.nanoTimestamp();
         write_ns += @intCast(t1 - t0);
     }
@@ -89,7 +77,7 @@ pub fn main() !void {
 
     // Phase E: Complete logger call (for comparison)
     std.debug.print("Phase E: Complete Logger Pipeline\n", .{});
-    var logger = zlog.Logger(.{}).init(null_writer.writer().any());
+    var logger = zlog.Logger(.{}).init(&null_writer);
     var complete_ns: u64 = 0;
 
     for (0..N) |i| {
@@ -105,23 +93,60 @@ pub fn main() !void {
 
     // Results
     std.debug.print("\n=== Results (per operation) ===\n", .{});
-    std.debug.print("Serialization:     {d:>6} ns ({d:>4.1} μs)\n", .{ serialize_ns / N, @as(f64, @floatFromInt(serialize_ns)) / @as(f64, @floatFromInt(N)) / 1000.0 });
-    std.debug.print("I/O:               {d:>6} ns ({d:>4.1} μs)\n", .{ write_ns / N, @as(f64, @floatFromInt(write_ns)) / @as(f64, @floatFromInt(N)) / 1000.0 });
-    std.debug.print("Mutex:             {d:>6} ns ({d:>4.1} μs)\n", .{ mutex_ns / N, @as(f64, @floatFromInt(mutex_ns)) / @as(f64, @floatFromInt(N)) / 1000.0 });
-    std.debug.print("Level filtering:   {d:>6} ns ({d:>4.1} μs)\n", .{ filter_ns / N, @as(f64, @floatFromInt(filter_ns)) / @as(f64, @floatFromInt(N)) / 1000.0 });
-    std.debug.print("Complete pipeline: {d:>6} ns ({d:>4.1} μs)\n", .{ complete_ns / N, @as(f64, @floatFromInt(complete_ns)) / @as(f64, @floatFromInt(N)) / 1000.0 });
+    std.debug.print(
+        "Serialization:     {d:>6} ns ({d:>4.1} μs)\n",
+        .{
+            serialize_ns / N,
+            @as(f64, @floatFromInt(serialize_ns)) / @as(f64, @floatFromInt(N)) / 1000.0,
+        },
+    );
+    std.debug.print(
+        "I/O:               {d:>6} ns ({d:>4.1} μs)\n",
+        .{
+            write_ns / N,
+            @as(f64, @floatFromInt(write_ns)) / @as(f64, @floatFromInt(N)) / 1000.0,
+        },
+    );
+    std.debug.print(
+        "Mutex:             {d:>6} ns ({d:>4.1} μs)\n",
+        .{
+            mutex_ns / N,
+            @as(f64, @floatFromInt(mutex_ns)) / @as(f64, @floatFromInt(N)) / 1000.0,
+        },
+    );
+    std.debug.print(
+        "Level filtering:   {d:>6} ns ({d:>4.1} μs)\n",
+        .{
+            filter_ns / N,
+            @as(f64, @floatFromInt(filter_ns)) / @as(f64, @floatFromInt(N)) / 1000.0,
+        },
+    );
+    std.debug.print(
+        "Complete pipeline: {d:>6} ns ({d:>4.1} μs)\n",
+        .{
+            complete_ns / N,
+            @as(f64, @floatFromInt(complete_ns)) / @as(f64, @floatFromInt(N)) / 1000.0,
+        },
+    );
 
     // Analysis
     const overhead = complete_ns - serialize_ns - write_ns;
     std.debug.print("\n=== Analysis ===\n", .{});
     std.debug.print("Core work (serialize + I/O): {d} ns\n", .{(serialize_ns + write_ns) / N});
     std.debug.print("Overhead (mutex + other):     {d} ns\n", .{overhead / N});
-    std.debug.print("Overhead percentage:          {d:.1}%\n", .{@as(f64, @floatFromInt(overhead)) / @as(f64, @floatFromInt(complete_ns)) * 100.0});
+    std.debug.print(
+        "Overhead percentage:          {d:.1}%\n",
+        .{@as(f64, @floatFromInt(overhead)) / @as(f64, @floatFromInt(complete_ns)) * 100.0},
+    );
 
     // Throughput calculations
     std.debug.print("\n=== Throughput ===\n", .{});
-    const complete_ops_per_sec = @as(f64, 1_000_000_000.0) / (@as(f64, @floatFromInt(complete_ns)) / @as(f64, @floatFromInt(N)));
-    const serialize_ops_per_sec = @as(f64, 1_000_000_000.0) / (@as(f64, @floatFromInt(serialize_ns)) / @as(f64, @floatFromInt(N)));
+    const complete_ops_per_sec =
+        @as(f64, 1_000_000_000.0) /
+        (@as(f64, @floatFromInt(complete_ns)) / @as(f64, @floatFromInt(N)));
+    const serialize_ops_per_sec =
+        @as(f64, 1_000_000_000.0) /
+        (@as(f64, @floatFromInt(serialize_ns)) / @as(f64, @floatFromInt(N)));
 
     std.debug.print("Complete pipeline: {d:>8.0} ops/sec\n", .{complete_ops_per_sec});
     std.debug.print("Pure serialization: {d:>8.0} ops/sec\n", .{serialize_ops_per_sec});
@@ -129,12 +154,12 @@ pub fn main() !void {
 
 // Direct formatting function (extracted from zlog internals)
 fn formatLogRecord(
-    writer: anytype,
+    writer: *std.Io.Writer,
     level: zlog.Level,
     message: []const u8,
     fields: []const zlog.Field,
 ) !usize {
-    const start_pos = try writer.context.getPos();
+    const start_pos = writer.buffered().len;
 
     try writer.writeByte('{');
 
@@ -182,11 +207,11 @@ fn formatLogRecord(
 
     try writer.writeAll("}\n");
 
-    const end_pos = try writer.context.getPos();
+    const end_pos = writer.buffered().len;
     return end_pos - start_pos;
 }
 
-fn writeEscapedString(writer: anytype, string: []const u8) !void {
+fn writeEscapedString(writer: *std.Io.Writer, string: []const u8) !void {
     for (string) |char| {
         switch (char) {
             '"' => try writer.writeAll("\\\""),

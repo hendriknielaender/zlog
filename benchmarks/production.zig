@@ -1,28 +1,45 @@
 const std = @import("std");
 const zlog = @import("zlog");
 
+const async_config = zlog.Config{
+    .async_mode = true,
+    .async_queue_size = 1024,
+    .batch_size = 32,
+};
+const async_flush_interval = 64;
+
+var async_state: zlog.Logger(async_config).AsyncState = .{};
+
 // Production-like writer that simulates realistic I/O patterns
 const ProductionWriter = struct {
     const Self = @This();
     const Error = error{ DiskFull, NetworkTimeout, PermissionDenied };
-    const Writer = std.io.Writer(*Self, Error, write);
 
+    writer: std.Io.Writer,
     bytes_written: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     write_latency_ns: u32,
     failure_rate: u32, // Failures per 10000 operations
+    last_error: ?Error = null,
     random: std.Random.DefaultPrng,
 
     pub fn init(write_latency_ns: u32, failure_rate: u32) Self {
         return .{
+            .writer = .{
+                .buffer = &.{},
+                .vtable = &vtable,
+            },
             .write_latency_ns = write_latency_ns,
             .failure_rate = failure_rate,
             .random = std.Random.DefaultPrng.init(@intCast(std.time.nanoTimestamp())),
         };
     }
 
-    pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
-    }
+    const vtable: std.Io.Writer.VTable = .{
+        .drain = drain,
+        .sendFile = std.Io.Writer.unimplementedSendFile,
+        .flush = std.Io.Writer.noopFlush,
+        .rebase = std.Io.Writer.failingRebase,
+    };
 
     fn write(self: *Self, bytes: []const u8) Error!usize {
         // Simulate write latency
@@ -49,6 +66,45 @@ const ProductionWriter = struct {
         return bytes.len;
     }
 
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("writer", w));
+
+        if (w.end != 0) {
+            self.writeAllBytes(w.buffered()) catch |err| {
+                self.last_error = err;
+                return error.WriteFailed;
+            };
+            w.end = 0;
+        }
+
+        if (data.len == 0) return 0;
+
+        var consumed: usize = 0;
+        for (data[0 .. data.len - 1]) |slice| {
+            self.writeAllBytes(slice) catch |err| {
+                self.last_error = err;
+                return error.WriteFailed;
+            };
+            consumed += slice.len;
+        }
+
+        const pattern = data[data.len - 1];
+        for (0..splat) |_| {
+            self.writeAllBytes(pattern) catch |err| {
+                self.last_error = err;
+                return error.WriteFailed;
+            };
+            consumed += pattern.len;
+        }
+
+        return consumed;
+    }
+
+    fn writeAllBytes(self: *Self, bytes: []const u8) Error!void {
+        if (bytes.len == 0) return;
+        _ = try self.write(bytes);
+    }
+
     pub fn getBytesWritten(self: *const Self) u64 {
         return self.bytes_written.load(.monotonic);
     }
@@ -62,15 +118,20 @@ const RequestContext = struct {
     method: []const u8,
     start_time: i64,
 
-    fn generate(allocator: std.mem.Allocator, id: u64) !RequestContext {
-        _ = allocator;
+    fn generate(id: u64) RequestContext {
         var request_id: [16]u8 = undefined;
         std.crypto.random.bytes(&request_id);
 
-        const endpoints = [_][]const u8{ "/api/users", "/api/orders", "/api/products", "/health", "/metrics" };
+        const endpoints = [_][]const u8{
+            "/api/users",
+            "/api/orders",
+            "/api/products",
+            "/health",
+            "/metrics",
+        };
         const methods = [_][]const u8{ "GET", "POST", "PUT", "DELETE" };
 
-        return RequestContext{
+        return .{
             .request_id = request_id,
             .user_id = 1000 + (id % 50000),
             .endpoint = endpoints[id % endpoints.len],
@@ -81,7 +142,7 @@ const RequestContext = struct {
 
     fn formatRequestId(self: *const RequestContext) [32]u8 {
         var result: [32]u8 = undefined;
-        _ = std.fmt.bufPrint(&result, "{x}", .{std.fmt.fmtSliceHexLower(&self.request_id)}) catch unreachable;
+        _ = std.fmt.bufPrint(&result, "{x}", .{self.request_id}) catch unreachable;
         return result;
     }
 };
@@ -90,14 +151,12 @@ const RequestContext = struct {
 const WorkloadSimulator = struct {
     const Self = @This();
 
-    allocator: std.mem.Allocator,
     request_count: u32,
     concurrent_requests: u32,
     error_rate: u32,
 
-    pub fn init(allocator: std.mem.Allocator, request_count: u32, concurrent_requests: u32, error_rate: u32) Self {
+    pub fn init(request_count: u32, concurrent_requests: u32, error_rate: u32) Self {
         return .{
-            .allocator = allocator,
             .request_count = request_count,
             .concurrent_requests = concurrent_requests,
             .error_rate = error_rate,
@@ -105,6 +164,14 @@ const WorkloadSimulator = struct {
     }
 
     pub fn runSyncWorkload(self: *Self, logger: anytype) !BenchmarkResult {
+        return self.runWorkload(logger, 0);
+    }
+
+    pub fn runAsyncWorkload(self: *Self, logger: anytype) !BenchmarkResult {
+        return self.runWorkload(logger, async_flush_interval);
+    }
+
+    fn runWorkload(self: *Self, logger: anytype, flush_every: u32) !BenchmarkResult {
         const start_time = std.time.nanoTimestamp();
         var completed_requests: u32 = 0;
         var total_latency_ns: u64 = 0;
@@ -113,7 +180,7 @@ const WorkloadSimulator = struct {
         // Simulate production request processing
         for (0..self.request_count) |i| {
             const req_start = std.time.nanoTimestamp();
-            const ctx = try RequestContext.generate(self.allocator, i);
+            const ctx = RequestContext.generate(i);
             const req_id_str = ctx.formatRequestId();
 
             // Request start logging
@@ -181,9 +248,13 @@ const WorkloadSimulator = struct {
 
             completed_requests += 1;
 
+            if (flush_every > 0 and completed_requests % flush_every == 0) {
+                try logger.flush();
+            }
+
             // Realistic request pacing
             if (i % 100 == 0) {
-                std.time.sleep(1 * std.time.ns_per_ms);
+                std.Thread.sleep(1 * std.time.ns_per_ms);
             }
         }
 
@@ -195,12 +266,9 @@ const WorkloadSimulator = struct {
             .completed_requests = completed_requests,
             .average_latency_ns = @intCast(@divTrunc(total_latency_ns, completed_requests)),
             .error_count = error_count,
-            .throughput_rps = @as(f64, @floatFromInt(completed_requests)) / (@as(f64, @floatFromInt(total_duration)) / 1_000_000_000.0),
+            .throughput_rps = @as(f64, @floatFromInt(completed_requests)) /
+                (@as(f64, @floatFromInt(total_duration)) / 1_000_000_000.0),
         };
-    }
-
-    pub fn runAsyncWorkload(self: *Self, logger: anytype) !BenchmarkResult {
-        return self.runSyncWorkload(logger); // Same workload pattern, different logger
     }
 };
 
@@ -213,20 +281,28 @@ const BenchmarkResult = struct {
 
     pub fn print(self: BenchmarkResult, mode: []const u8) void {
         std.debug.print("\n=== {s} Results ===\n", .{mode});
-        std.debug.print("Total Duration:     {d:>8.1} ms\n", .{@as(f64, @floatFromInt(self.total_duration_ns)) / 1_000_000.0});
+        std.debug.print(
+            "Total Duration:     {d:>8.1} ms\n",
+            .{@as(f64, @floatFromInt(self.total_duration_ns)) / 1_000_000.0},
+        );
         std.debug.print("Completed Requests: {d:>8}\n", .{self.completed_requests});
-        std.debug.print("Average Latency:    {d:>8.1} μs\n", .{@as(f64, @floatFromInt(self.average_latency_ns)) / 1000.0});
+        std.debug.print(
+            "Average Latency:    {d:>8.1} μs\n",
+            .{@as(f64, @floatFromInt(self.average_latency_ns)) / 1000.0},
+        );
         std.debug.print("Throughput:         {d:>8.1} req/sec\n", .{self.throughput_rps});
         std.debug.print("Error Count:        {d:>8}\n", .{self.error_count});
-        std.debug.print("Error Rate:         {d:>8.2}%\n", .{@as(f64, @floatFromInt(self.error_count)) / @as(f64, @floatFromInt(self.completed_requests)) * 100.0});
+        std.debug.print(
+            "Error Rate:         {d:>8.2}%\n",
+            .{
+                @as(f64, @floatFromInt(self.error_count)) /
+                    @as(f64, @floatFromInt(self.completed_requests)) * 100.0,
+            },
+        );
     }
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
     std.debug.print("=== Production-Near Async vs Sync Logging Benchmark ===\n", .{});
     std.debug.print("Simulating high-throughput web service with realistic I/O patterns\n", .{});
 
@@ -240,9 +316,17 @@ pub fn main() !void {
         write_latency_ns: u32,
         failure_rate: u32,
     }{
-        .{ .name = "Fast SSD", .write_latency_ns = 100_000, .failure_rate = 1 }, // 100μs latency, 0.01% failure
-        .{ .name = "Network Log", .write_latency_ns = 5_000_000, .failure_rate = 50 }, // 5ms latency, 0.5% failure
-        .{ .name = "Slow Disk", .write_latency_ns = 10_000_000, .failure_rate = 20 }, // 10ms latency, 0.2% failure
+        .{ .name = "Fast SSD", .write_latency_ns = 100_000, .failure_rate = 1 }, // 100μs latency
+        .{
+            .name = "Network Log",
+            .write_latency_ns = 5_000_000,
+            .failure_rate = 50,
+        }, // 5ms latency
+        .{
+            .name = "Slow Disk",
+            .write_latency_ns = 10_000_000,
+            .failure_rate = 20,
+        }, // 10ms latency
     };
 
     for (scenarios) |scenario| {
@@ -256,8 +340,8 @@ pub fn main() !void {
 
         // Sync benchmark
         var sync_writer = ProductionWriter.init(scenario.write_latency_ns, scenario.failure_rate);
-        var sync_logger = zlog.Logger(.{}).init(sync_writer.writer().any());
-        var sync_workload = WorkloadSimulator.init(allocator, request_count, concurrent_requests, error_rate);
+        var sync_logger = zlog.Logger(.{}).init(&sync_writer);
+        var sync_workload = WorkloadSimulator.init(request_count, concurrent_requests, error_rate);
 
         std.debug.print("Running sync benchmark...\n", .{});
         const sync_result = try sync_workload.runSyncWorkload(&sync_logger);
@@ -266,32 +350,40 @@ pub fn main() !void {
 
         // Async benchmark
         var async_writer = ProductionWriter.init(scenario.write_latency_ns, scenario.failure_rate);
+        async_state = .{};
+        var async_logger = zlog.Logger(async_config).initAsync(&async_writer, &async_state);
+        defer async_logger.deinit();
 
-        var async_logger = try zlog.Logger(.{
-            .async_mode = true,
-            .async_queue_size = 8192,
-        }).initAsync(async_writer.writer().any(), allocator);
-        defer async_logger.deinitWithAllocator(allocator);
-
-        var async_workload = WorkloadSimulator.init(allocator, request_count, concurrent_requests, error_rate);
+        var async_workload = WorkloadSimulator.init(request_count, concurrent_requests, error_rate);
 
         std.debug.print("Running async benchmark...\n", .{});
-        const async_result = try async_workload.runAsyncWorkload(&async_logger);
+        var async_result = try async_workload.runAsyncWorkload(&async_logger);
+        const flush_start = std.time.nanoTimestamp();
+        try async_logger.flush();
+        const flush_end = std.time.nanoTimestamp();
+        const flush_duration_ns = flush_end - flush_start;
 
-        // Allow time for async processing to complete
-        std.time.sleep(100 * std.time.ns_per_ms);
+        async_result.total_duration_ns += @intCast(flush_duration_ns);
+        async_result.throughput_rps =
+            @as(f64, @floatFromInt(async_result.completed_requests)) /
+            (@as(f64, @floatFromInt(async_result.total_duration_ns)) / 1_000_000_000.0);
 
         async_result.print("Async Logging");
         std.debug.print("Bytes Written:      {d:>8} bytes\n", .{async_writer.getBytesWritten()});
 
         // Performance comparison
-        const latency_improvement = @as(f64, @floatFromInt(sync_result.average_latency_ns)) / @as(f64, @floatFromInt(async_result.average_latency_ns));
+        const latency_improvement =
+            @as(f64, @floatFromInt(sync_result.average_latency_ns)) /
+            @as(f64, @floatFromInt(async_result.average_latency_ns));
         const throughput_improvement = async_result.throughput_rps / sync_result.throughput_rps;
 
         std.debug.print("\n=== Performance Comparison ===\n", .{});
         std.debug.print("Latency Improvement: {d:>8.1}x faster\n", .{latency_improvement});
         std.debug.print("Throughput Gain:     {d:>8.1}x higher\n", .{throughput_improvement});
-        std.debug.print("Async Advantage:     {d:>8.1}% better overall\n", .{(throughput_improvement - 1.0) * 100.0});
+        std.debug.print(
+            "Async Advantage:     {d:>8.1}% better overall\n",
+            .{(throughput_improvement - 1.0) * 100.0},
+        );
     }
 
     std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
