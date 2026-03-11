@@ -108,7 +108,7 @@ pub const Resource = struct {
         // Auto-detect process information at runtime
         updated.process_pid = switch (@import("builtin").os.tag) {
             .linux => @intCast(std.os.linux.getpid()),
-            .windows => @intCast(std.os.windows.kernel32.GetCurrentProcessId()),
+            .windows => @intCast(std.os.windows.GetCurrentProcessId()),
             .macos => @intCast(std.c.getpid()),
             else => null,
         };
