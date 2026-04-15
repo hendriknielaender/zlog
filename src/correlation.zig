@@ -3,10 +3,14 @@ const assert = std.debug.assert;
 const trace_mod = @import("trace.zig");
 const config = @import("config.zig");
 
+fn runtimeIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 pub const Span = struct {
     trace_context: trace_mod.TraceContext,
     name: []const u8,
-    started_at: std.time.Instant,
+    start_time: i128,
     thread_id: u32,
 
     id: u64,
@@ -14,31 +18,24 @@ pub const Span = struct {
     parent_span_bytes: ?[8]u8,
     task_id: u64,
 
-    pub fn init(
-        span_name: []const u8,
-        parent_span_bytes: ?[8]u8,
-        trace_ctx: trace_mod.TraceContext,
-    ) Span {
+    pub fn init(span_name: []const u8, parent_span_bytes: ?[8]u8, trace_ctx: trace_mod.TraceContext) Span {
         assert(span_name.len > 0);
         assert(span_name.len < 256);
         assert(!trace_mod.is_all_zero_id(trace_ctx.trace_id[0..]));
-        if (parent_span_bytes) |parent_span_id| {
-            assert(!trace_mod.is_all_zero_id(parent_span_id[0..]));
-        }
+        assert(parent_span_bytes == null or !trace_mod.is_all_zero_id(parent_span_bytes.?[0..]));
 
         const span_trace_context = trace_ctx.createChild(trace_ctx.trace_flags.sampled);
+        const timestamp_ns: i128 = std.Io.Timestamp.now(runtimeIo(), .awake).nanoseconds;
         const thread_id_current = std.Thread.getCurrentId();
-        const started_at = std.time.Instant.now() catch unreachable;
 
         const span_id_legacy = std.mem.readInt(u64, &span_trace_context.parent_id, .big);
-        const parent_id_legacy =
-            if (parent_span_bytes) |pb| std.mem.readInt(u64, &pb, .big) else null;
+        const parent_id_legacy = if (parent_span_bytes) |pb| std.mem.readInt(u64, &pb, .big) else null;
         const task_id_legacy = trace_mod.extract_short_from_trace_id(span_trace_context.trace_id);
 
         const span_result = Span{
             .trace_context = span_trace_context,
             .name = span_name,
-            .started_at = started_at,
+            .start_time = timestamp_ns,
             .thread_id = @intCast(thread_id_current),
             .id = span_id_legacy,
             .parent_id = parent_id_legacy,
@@ -47,6 +44,7 @@ pub const Span = struct {
         };
 
         assert(!trace_mod.is_all_zero_id(span_result.trace_context.parent_id[0..]));
+        assert(span_result.start_time > 0);
         assert(span_result.thread_id > 0);
         return span_result;
     }
@@ -55,69 +53,83 @@ pub const Span = struct {
         return self.trace_context.parent_id;
     }
 
-    pub fn durationNs(self: *const Span, finished_at: std.time.Instant) u64 {
-        return finished_at.since(self.started_at);
+    pub fn durationNs(self: *const Span, finish_time_ns: i128) u64 {
+        assert(finish_time_ns >= self.start_time);
+        assert(self.start_time > 0);
+
+        const duration_ns = finish_time_ns - self.start_time;
+        assert(duration_ns >= 0);
+        return @intCast(duration_ns);
+    }
+};
+
+const SpanStack = struct {
+    data: [32][8]u8,
+    len: u32,
+
+    pub fn init() SpanStack {
+        // SAFETY: The stack starts empty, so `data` is never read until `append` writes it.
+        var span_stack: SpanStack = undefined;
+        span_stack.len = 0;
+        return span_stack;
+    }
+
+    pub fn append(self: *SpanStack, span_id_bytes: [8]u8) !void {
+        assert(self.len <= self.capacity());
+        if (self.len == self.capacity()) return error.Overflow;
+
+        const write_index: usize = @intCast(self.len);
+        self.data[write_index] = span_id_bytes;
+        self.len += 1;
+
+        assert(self.len <= self.capacity());
+    }
+
+    pub fn pop(self: *SpanStack) ?[8]u8 {
+        assert(self.len <= self.capacity());
+        if (self.len == 0) return null;
+
+        self.len -= 1;
+        const read_index: usize = @intCast(self.len);
+        return self.data[read_index];
+    }
+
+    pub fn get(self: *const SpanStack, index: u32) [8]u8 {
+        assert(index < self.len);
+
+        const read_index: usize = @intCast(index);
+        return self.data[read_index];
+    }
+
+    pub fn capacity(self: *const SpanStack) u32 {
+        _ = self;
+        return 32;
     }
 };
 
 pub const TaskContext = struct {
     trace_context: trace_mod.TraceContext,
-    span_stack: struct {
-        data: [32][8]u8 = undefined,
-        len: usize = 0,
-
-        pub fn append(self: *@This(), item: [8]u8) !void {
-            if (self.len >= 32) return error.Overflow;
-            self.data[self.len] = item;
-            self.len += 1;
-        }
-
-        pub fn pop(self: *@This()) ?[8]u8 {
-            if (self.len == 0) return null;
-            self.len -= 1;
-            return self.data[self.len];
-        }
-
-        pub fn slice(self: *const @This()) [][8]u8 {
-            return self.data[0..self.len];
-        }
-
-        pub fn get(self: *const @This(), index: usize) [8]u8 {
-            return self.data[index];
-        }
-
-        pub fn capacity(self: *const @This()) usize {
-            _ = self;
-            return 32;
-        }
-    } = .{},
+    span_stack: SpanStack = SpanStack.init(),
 
     id: u64,
     parent_id: ?u64,
 
     pub fn init(parent_context_id: ?u64) TaskContext {
-        if (parent_context_id) |parent_id| {
-            assert(parent_id >= 1);
-        }
+        assert(parent_context_id == null or parent_context_id.? >= 1);
 
         const trace_ctx = trace_mod.TraceContext.init(false);
-        const span_stack_empty = @TypeOf(@as(TaskContext, undefined).span_stack){};
 
         const legacy_task_id = trace_mod.extract_short_from_trace_id(trace_ctx.trace_id);
         const legacy_parent_id = if (parent_context_id) |pid| pid else null;
 
         const context_result = TaskContext{
             .trace_context = trace_ctx,
-            .span_stack = span_stack_empty,
+            .span_stack = SpanStack.init(),
             .id = legacy_task_id,
             .parent_id = legacy_parent_id,
         };
 
-        if (context_result.id == 0) {
-            assert(!trace_mod.is_all_zero_id(trace_ctx.trace_id[0..8]));
-        } else {
-            assert(context_result.id >= 1);
-        }
+        assert(context_result.id >= 1 or !trace_mod.is_all_zero_id(trace_ctx.trace_id[0..8]));
         assert(context_result.span_stack.len == 0);
         assert(context_result.span_stack.capacity() == 32);
         return context_result;
@@ -127,12 +139,11 @@ pub const TaskContext = struct {
         assert(trace_ctx.version == 0x00);
         assert(!trace_mod.is_all_zero_id(trace_ctx.trace_id[0..]));
 
-        const span_stack_empty = @TypeOf(@as(TaskContext, undefined).span_stack){};
         const legacy_task_id = trace_mod.extract_short_from_trace_id(trace_ctx.trace_id);
 
         const context_result = TaskContext{
             .trace_context = trace_ctx,
-            .span_stack = span_stack_empty,
+            .span_stack = SpanStack.init(),
             .id = legacy_task_id,
             .parent_id = null,
         };
@@ -143,12 +154,18 @@ pub const TaskContext = struct {
 
     pub fn createChild(self: *const TaskContext) TaskContext {
         assert(!trace_mod.is_all_zero_id(self.trace_context.trace_id[0..]));
+        assert(self.id >= 1);
 
-        const child_trace_context = self.createChildTraceContext(self.trace_context.trace_flags.sampled);
+        const child_trace_context =
+            self.createChildTraceContext(self.trace_context.trace_flags.sampled);
         var child_context = TaskContext.fromTraceContext(child_trace_context);
         child_context.id = generate_task_id();
         child_context.parent_id = self.id;
+
+        assert(child_context.id >= 1);
         assert(child_context.id != self.id);
+        assert(child_context.parent_id.? == self.id);
+        assert(std.mem.eql(u8, &child_context.trace_context.trace_id, &self.trace_context.trace_id));
         return child_context;
     }
 
@@ -205,10 +222,7 @@ pub const TaskContext = struct {
         return std.mem.readInt(u64, &span_bytes, .big);
     }
 
-    pub fn createChildTraceContext(
-        self: *const TaskContext,
-        sampling_decision: bool,
-    ) trace_mod.TraceContext {
+    pub fn createChildTraceContext(self: *const TaskContext, sampling_decision: bool) trace_mod.TraceContext {
         assert(!trace_mod.is_all_zero_id(self.trace_context.trace_id[0..]));
         return self.trace_context.createChild(sampling_decision);
     }
@@ -220,11 +234,7 @@ pub const CorrelationContext = packed struct {
     thread_id: u16,
     level: config.Level,
 
-    pub fn fromTraceContext(
-        trace_ctx: trace_mod.TraceContext,
-        span_bytes_optional: ?[8]u8,
-        level_value: config.Level,
-    ) CorrelationContext {
+    pub fn fromTraceContext(trace_ctx: trace_mod.TraceContext, span_bytes_optional: ?[8]u8, level_value: config.Level) CorrelationContext {
         assert(!trace_mod.is_all_zero_id(trace_ctx.trace_id[0..]));
         assert(@intFromEnum(level_value) <= @intFromEnum(config.Level.fatal));
 
@@ -238,11 +248,7 @@ pub const CorrelationContext = packed struct {
         const thread_id_current = std.Thread.getCurrentId();
         const thread_id_truncated: u16 = @truncate(thread_id_current);
 
-        if (task_id_truncated == 0) {
-            assert(!trace_mod.is_all_zero_id(trace_ctx.trace_id[0..8]));
-        } else {
-            assert(task_id_truncated >= 1);
-        }
+        assert(task_id_truncated >= 1 or !trace_mod.is_all_zero_id(trace_ctx.trace_id[0..8]));
         assert(thread_id_truncated > 0);
 
         return CorrelationContext{
@@ -253,11 +259,7 @@ pub const CorrelationContext = packed struct {
         };
     }
 
-    pub fn fromIds(
-        task_id_u64: u64,
-        span_id_optional: ?u64,
-        level_value: config.Level,
-    ) CorrelationContext {
+    pub fn fromIds(task_id_u64: u64, span_id_optional: ?u64, level_value: config.Level) CorrelationContext {
         assert(task_id_u64 >= 1);
         assert(@intFromEnum(level_value) <= @intFromEnum(config.Level.fatal));
 
@@ -280,7 +282,6 @@ pub const CorrelationContext = packed struct {
 };
 
 var task_id_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
-
 threadlocal var current_task_context: ?TaskContext = null;
 
 pub fn generate_task_id() u64 {
@@ -291,10 +292,10 @@ pub fn generate_task_id() u64 {
 }
 
 pub fn getCurrentTaskContext() TaskContext {
-    if (current_task_context) |context| {
-        assert(context.id >= 1);
-        assert(context.span_stack.capacity() == 32);
-        return context;
+    if (current_task_context) |context_value| {
+        assert(context_value.id >= 1);
+        assert(context_value.span_stack.capacity() == 32);
+        return context_value;
     }
     const default_context = TaskContext.init(null);
     assert(default_context.id >= 1);
@@ -324,6 +325,7 @@ pub fn ensureTaskContext() *TaskContext {
 
     const context_ptr = &current_task_context.?;
     assert(context_ptr.id >= 1);
+    assert(context_ptr.span_stack.capacity() == 32);
     return context_ptr;
 }
 
@@ -343,9 +345,11 @@ test "Span.init creates valid span" {
     const span = Span.init("test_span", null, trace_ctx);
 
     try testing.expectEqualStrings("test_span", span.name);
+    try testing.expect(span.start_time > 0);
     try testing.expect(span.thread_id > 0);
     try testing.expect(span.id > 0);
     try testing.expect(span.parent_id == null);
+    try testing.expect(span.parent_span_bytes == null);
     try testing.expect(span.task_id > 0);
 }
 
@@ -484,4 +488,15 @@ test "createChildTaskContext creates child with parent reference" {
         &child_context.trace_context.trace_id,
         &parent_context.trace_context.trace_id,
     ));
+}
+
+test "clearTaskContext removes the current thread-local context" {
+    var context = TaskContext.init(null);
+    setTaskContext(&context);
+
+    try testing.expect(getCurrentTaskContextIfSet() != null);
+
+    clearTaskContext();
+
+    try testing.expect(getCurrentTaskContextIfSet() == null);
 }

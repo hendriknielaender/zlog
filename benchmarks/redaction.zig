@@ -1,161 +1,101 @@
 const std = @import("std");
-const zbench = @import("zbench");
 const zlog = @import("zlog");
-const NullWriter = @import("writers.zig").NullWriter;
+const support = @import("support.zig");
 
-// Global allocator for benchmarks
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main() !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    std.debug.print("=== Redaction Benchmark ===\n\n", .{});
 
-fn benchmarkRegularFields(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(&null_writer);
+    const baseline_ns = benchmarkBaseline(150_000);
+    const redacted_ns = try benchmarkWithRedaction(150_000);
+    const dense_redaction_ns = try benchmarkDenseRedaction(150_000);
 
-    const trace_ctx = zlog.TraceContext.init(true);
-    const fields = [_]zlog.Field{
-        zlog.Field.string("username", "john.doe@example.com"),
-        zlog.Field.string("password", "super_secret_password_123"),
-        zlog.Field.string("api_key", "sk_live_abcdef123456789"),
-        zlog.Field.int("user_id", 12345),
-        zlog.Field.float("balance", 1234.56),
-    };
-
-    logger.infoWithTrace("User activity - no redaction", trace_ctx, &fields);
+    printCase("baseline", 150_000, baseline_ns);
+    printCase("runtime redaction", 150_000, redacted_ns);
+    printCase("many protected keys", 150_000, dense_redaction_ns);
 }
 
-fn benchmarkRedactedFields(allocator: std.mem.Allocator) void {
-    _ = allocator;
+fn benchmarkBaseline(iterations: usize) i128 {
+    var sink_buffer: [256]u8 = undefined;
+    var sink = std.Io.Writer.Discarding.init(&sink_buffer);
+    var logger = zlog.Logger(.{}).init(&sink.writer);
+    defer logger.deinit();
+
+    const trace_ctx = zlog.TraceContext.init(true);
+    const start = support.nowNs();
+    for (0..iterations) |i| {
+        logger.infoWithTrace("user activity", trace_ctx, .{
+            .username = "john.doe@example.com",
+            .password = "super_secret_password_123",
+            .api_key = "sk_live_abcdef123456789",
+            .attempt = @as(u64, @intCast(i)),
+            .success = true,
+        });
+    }
+    return support.nowNs() - start;
+}
+
+fn benchmarkWithRedaction(iterations: usize) !i128 {
     var redaction_storage: [8][]const u8 = undefined;
     var redaction_config = zlog.RedactionConfig.init(&redaction_storage);
     defer redaction_config.deinit();
+    try redaction_config.addKey("password");
+    try redaction_config.addKey("api_key");
 
-    redaction_config.addKey("password") catch return;
-    redaction_config.addKey("api_key") catch return;
-
-    var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).initWithRedaction(&null_writer, &redaction_config);
-
-    const trace_ctx = zlog.TraceContext.init(true);
-    const fields = [_]zlog.Field{
-        zlog.Field.string("username", "john.doe@example.com"),
-        zlog.Field.string("password", "super_secret_password_123"), // Will be redacted
-        zlog.Field.string("api_key", "sk_live_abcdef123456789"), // Will be redacted
-        zlog.Field.int("user_id", 12345),
-        zlog.Field.float("balance", 1234.56),
-    };
-
-    logger.infoWithTrace("User activity - automatic redaction", trace_ctx, &fields);
-}
-
-fn benchmarkMixedFields(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var redaction_storage: [8][]const u8 = undefined;
-    var redaction_config = zlog.RedactionConfig.init(&redaction_storage);
-    defer redaction_config.deinit();
-
-    redaction_config.addKey("password") catch return;
-    redaction_config.addKey("session_token") catch return;
-    redaction_config.addKey("secret_data") catch return;
-
-    var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).initWithRedaction(&null_writer, &redaction_config);
+    var sink_buffer: [256]u8 = undefined;
+    var sink = std.Io.Writer.Discarding.init(&sink_buffer);
+    var logger = zlog.Logger(.{}).initWithRedaction(&sink.writer, &redaction_config);
+    defer logger.deinit();
 
     const trace_ctx = zlog.TraceContext.init(true);
-    const fields = [_]zlog.Field{
-        zlog.Field.string("action", "user_login"),
-        zlog.Field.string("username", "alice@example.com"),
-        zlog.Field.string("password", "secretpassword123"), // Will be redacted
-        zlog.Field.string("ip_address", "192.168.1.100"),
-        zlog.Field.string("session_token", "abc123def456"), // Will be redacted
-        zlog.Field.int("attempt", 1),
-        zlog.Field.boolean("success", true),
-    };
-
-    logger.infoWithTrace("Mixed regular and redacted fields", trace_ctx, &fields);
+    const start = support.nowNs();
+    for (0..iterations) |i| {
+        logger.infoWithTrace("user activity", trace_ctx, .{
+            .username = "john.doe@example.com",
+            .password = "super_secret_password_123",
+            .api_key = "sk_live_abcdef123456789",
+            .attempt = @as(u64, @intCast(i)),
+            .success = true,
+        });
+    }
+    return support.nowNs() - start;
 }
 
-fn benchmarkManyRedactedFields(allocator: std.mem.Allocator) void {
-    _ = allocator;
+fn benchmarkDenseRedaction(iterations: usize) !i128 {
     var redaction_storage: [16][]const u8 = undefined;
     var redaction_config = zlog.RedactionConfig.init(&redaction_storage);
     defer redaction_config.deinit();
+    for ([_][]const u8{ "ssn", "credit_card", "cvv", "pin", "password", "api_key", "secret_token" }) |key| {
+        try redaction_config.addKey(key);
+    }
 
-    redaction_config.addKey("ssn") catch return;
-    redaction_config.addKey("credit_card") catch return;
-    redaction_config.addKey("cvv") catch return;
-    redaction_config.addKey("pin") catch return;
-    redaction_config.addKey("password") catch return;
-    redaction_config.addKey("api_key") catch return;
-    redaction_config.addKey("secret_token") catch return;
-
-    var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).initWithRedaction(&null_writer, &redaction_config);
+    var sink_buffer: [256]u8 = undefined;
+    var sink = std.Io.Writer.Discarding.init(&sink_buffer);
+    var logger = zlog.Logger(.{}).initWithRedaction(&sink.writer, &redaction_config);
+    defer logger.deinit();
 
     const trace_ctx = zlog.TraceContext.init(true);
-    const fields = [_]zlog.Field{
-        zlog.Field.string("ssn", "123-45-6789"), // Will be redacted
-        zlog.Field.string("credit_card", "4532123456789012"), // Will be redacted
-        zlog.Field.string("cvv", "123"), // Will be redacted
-        zlog.Field.string("pin", "1234"), // Will be redacted
-        zlog.Field.string("password", "mypassword123"), // Will be redacted
-        zlog.Field.string("api_key", "sk_live_abc123"), // Will be redacted
-        zlog.Field.string("secret_token", "token_xyz789"), // Will be redacted
-        zlog.Field.string("user_id", "USER-12345"),
-        zlog.Field.boolean("verified", true),
-        zlog.Field.string("country", "US"),
-        zlog.Field.int("age", 30),
-        zlog.Field.float("balance", 1500.75),
-    };
-
-    logger.infoWithTrace("Many redacted fields", trace_ctx, &fields);
+    const start = support.nowNs();
+    for (0..iterations) |i| {
+        logger.infoWithTrace("payment update", trace_ctx, .{
+            .ssn = "123-45-6789",
+            .credit_card = "4532123456789012",
+            .cvv = "123",
+            .pin = "1234",
+            .password = "mypassword123",
+            .api_key = "sk_live_abc123",
+            .secret_token = "token_xyz789",
+            .request_id = @as(u64, @intCast(i)),
+            .verified = true,
+        });
+    }
+    return support.nowNs() - start;
 }
 
-fn benchmarkLegacyRedactedField(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var null_writer = NullWriter{};
-    var logger = zlog.Logger(.{}).init(&null_writer);
-
-    const trace_ctx = zlog.TraceContext.init(true);
-    const fields = [_]zlog.Field{
-        zlog.Field.string("username", "user@example.com"),
-        // Manual redacted field (still supported for legacy use)
-        zlog.Field{
-            .key = "manual_redacted",
-            .value = .{
-                .redacted = .{ .value_type = .string, .hint = "manual_hint" },
-            },
-        },
-        zlog.Field.int("request_count", 42),
-    };
-
-    logger.infoWithTrace("Legacy redacted field", trace_ctx, &fields);
-}
-
-pub fn main() !void {
-    const allocator = gpa.allocator();
-
-    var bench = zbench.Benchmark.init(allocator, .{
-        .iterations = 1_000_000,
-        .max_iterations = 10_000_000,
-        .time_budget_ns = 2_000_000_000, // 2 seconds per benchmark
-    });
-    defer bench.deinit();
-
-    std.debug.print("\n=== zlog Automatic Redaction Performance Benchmarks ===\n\n", .{});
-
-    try bench.add("Regular fields (baseline)", benchmarkRegularFields, .{});
-    try bench.add("Automatic redaction", benchmarkRedactedFields, .{});
-    try bench.add("Mixed regular/redacted", benchmarkMixedFields, .{});
-    try bench.add("Many redacted fields", benchmarkManyRedactedFields, .{});
-    try bench.add("Legacy manual redaction", benchmarkLegacyRedactedField, .{});
-
-    // Simple benchmark output instead of zbench
-    std.debug.print("Running redaction benchmarks...\n", .{});
-    std.debug.print("• Regular fields: Running...\n", .{});
-    benchmarkRegularFields(allocator);
-    std.debug.print("• Automatic redaction: Running...\n", .{});
-    benchmarkRedactedFields(allocator);
-    std.debug.print("• Mixed regular/redacted: Running...\n", .{});
-    benchmarkMixedFields(allocator);
-    std.debug.print("All redaction benchmarks completed successfully.\n", .{});
+fn printCase(name: []const u8, iterations: usize, duration_ns: i128) void {
+    std.debug.print(
+        "{s:>18}: {d:>8.2} ms  ({d:>10.0} msg/s)\n",
+        .{ name, support.nsToMs(duration_ns), support.perSecond(iterations, duration_ns) },
+    );
 }

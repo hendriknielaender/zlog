@@ -4,6 +4,10 @@ const config = @import("config.zig");
 const field = @import("field.zig");
 const trace_mod = @import("trace.zig");
 
+fn runtimeIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 /// OpenTelemetry Log Severity Numbers as per specification
 /// https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-severitynumber
 pub const SeverityNumber = enum(u8) {
@@ -192,7 +196,7 @@ pub const LogRecord = struct {
         assert(resource.service_name.len > 0);
         assert(scope.name.len > 0);
 
-        const now_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
+        const now_ns: u64 = @intCast(std.Io.Timestamp.now(runtimeIo(), .real).nanoseconds);
         const severity = SeverityNumber.fromLevel(level);
 
         const result = LogRecord{

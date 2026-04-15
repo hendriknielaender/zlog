@@ -4,6 +4,10 @@ const trace_mod = @import("trace.zig");
 const field = @import("field.zig");
 const config = @import("config.zig");
 
+fn runtimeIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 pub const LogEvent = struct {
     level_str: [8]u8,
     message: []const u8,
@@ -34,7 +38,7 @@ pub const LogEvent = struct {
         @memcpy(level_str_buf[0..level_name.len], level_name);
         @memset(level_str_buf[level_name.len..], ' ');
 
-        const timestamp_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
+        const timestamp_ms: u64 = @intCast(@max(0, std.Io.Timestamp.now(runtimeIo(), .real).toMilliseconds()));
         const thread_id_current: u32 = @intCast(std.Thread.getCurrentId());
 
         const event_result = LogEvent{

@@ -1,41 +1,19 @@
 const std = @import("std");
 
-const version = std.SemanticVersion{ .major = 0, .minor = 3, .patch = 0 };
+const version = std.SemanticVersion{ .major = 0, .minor = 4, .patch = 0 };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Setup dependencies (always needed)
-    const deps = setupDependencies(b, target, optimize);
-
     // Setup library and module (always needed as base)
-    const lib_step = setupLibrary(b, target, optimize, deps);
+    const lib_step = setupLibrary(b, target, optimize);
 
     // Setup other components only when requested
-    setupTesting(b, target, optimize, deps);
-    setupBenchmarks(b, target, optimize, deps);
-    setupExamples(b, target, optimize, deps);
+    setupTesting(b, target, optimize);
+    setupBenchmarks(b, target);
+    setupExamples(b, target, optimize);
     setupDocumentation(b, lib_step.lib);
-}
-
-const Dependencies = struct {
-    zbench_module: *std.Build.Module,
-};
-
-fn setupDependencies(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-) Dependencies {
-    const zbench_dep = b.dependency("zbench", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    return .{
-        .zbench_module = zbench_dep.module("zbench"),
-    };
 }
 
 const LibraryStep = struct {
@@ -43,20 +21,15 @@ const LibraryStep = struct {
     module: *std.Build.Module,
 };
 
-fn setupLibrary(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    deps: Dependencies,
-) LibraryStep {
-    _ = deps;
-
+fn setupLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) LibraryStep {
+    // Module for the main library
     const zlog_module = b.addModule("zlog", .{
         .root_source_file = b.path("src/zlog.zig"),
         .target = target,
         .optimize = optimize,
     });
 
+    // Static library
     const lib = b.addLibrary(.{
         .name = "zlog",
         .root_module = zlog_module,
@@ -71,16 +44,10 @@ fn setupLibrary(
     };
 }
 
-fn setupTesting(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    deps: Dependencies,
-) void {
-    _ = deps;
-
+fn setupTesting(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const test_step = b.step("test", "Run unit tests");
 
+    // Unit tests (built into the source file)
     const unit_tests = b.addTest(.{
         .name = "zlog_tests",
         .root_module = b.createModule(.{
@@ -94,12 +61,7 @@ fn setupTesting(
     test_step.dependOn(&run_unit_tests.step);
 }
 
-fn setupBenchmarks(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    _: std.builtin.OptimizeMode,
-    deps: Dependencies,
-) void {
+fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget) void {
     const benchmark_step = b.step("benchmarks", "Run all performance benchmarks");
 
     const benchmark_names = [_][]const u8{
@@ -112,6 +74,7 @@ fn setupBenchmarks(
         "ergonomic_otel",
     };
 
+    // Create module for benchmarks to import
     const zlog_benchmark_module = b.addModule("zlog", .{
         .root_source_file = b.path("src/zlog.zig"),
         .target = target,
@@ -127,38 +90,29 @@ fn setupBenchmarks(
                 .optimize = .ReleaseFast,
             }),
         });
-
-        benchmark_exe.root_module.addImport("zbench", deps.zbench_module);
         benchmark_exe.root_module.addImport("zlog", zlog_benchmark_module);
 
         const run_benchmark = b.addRunArtifact(benchmark_exe);
 
-        const individual_step = b.step(
-            b.fmt("benchmark-{s}", .{benchmark_name}),
-            b.fmt("Run {s} benchmark", .{benchmark_name}),
-        );
+        // Individual benchmark steps
+        const individual_step = b.step(b.fmt("benchmark-{s}", .{benchmark_name}), b.fmt("Run {s} benchmark", .{benchmark_name}));
         individual_step.dependOn(&run_benchmark.step);
 
         benchmark_step.dependOn(&run_benchmark.step);
     }
 }
 
-fn setupExamples(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    deps: Dependencies,
-) void {
-    _ = deps;
-
+fn setupExamples(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const examples_step = b.step("examples", "Run all examples");
 
+    // Create module for examples to import
     const zlog_example_module = b.addModule("zlog", .{
         .root_source_file = b.path("src/zlog.zig"),
         .target = target,
         .optimize = optimize,
     });
 
+    // OTel example
     const otel_example = b.addExecutable(.{
         .name = "otel_example",
         .root_module = b.createModule(.{
