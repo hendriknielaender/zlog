@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x55b82e332fb709da,
     .name = .zlog,
-    .version = "0.3.0",
+    .version = "0.4.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
