@@ -2,6 +2,7 @@ const std = @import("std");
 
 const config = @import("config.zig");
 const field = @import("field.zig");
+const field_input = @import("field_input.zig");
 const trace_mod = @import("trace.zig");
 const otel = @import("otel.zig");
 const escape = @import("string_escape.zig");
@@ -37,8 +38,20 @@ pub fn OTelLoggerWithRedaction(
         const compile_time_redacted_fields = redaction_options.redacted_fields;
 
         const AsyncEntry = struct {
-            bytes: []u8,
-            level: config.Level,
+            bytes: [buffer_size]u8,
+            len: u32,
+
+            fn init() AsyncEntry {
+                // SAFETY: `bytes` are written before `slice` exposes any of them, and `len` starts at 0.
+                var entry: AsyncEntry = undefined;
+                entry.len = 0;
+                return entry;
+            }
+
+            fn slice(self: *const AsyncEntry) []const u8 {
+                std.debug.assert(self.len <= buffer_size);
+                return self.bytes[0..self.len];
+            }
         };
 
         level: config.Level,
@@ -47,10 +60,8 @@ pub fn OTelLoggerWithRedaction(
         instrumentation_scope: otel.InstrumentationScope,
         mutex: if (async_mode) void else std.Io.Mutex = if (async_mode) {} else .init,
         output: if (async_mode) void else OutputWriter,
-        allocator: if (async_mode) std.mem.Allocator else void = if (async_mode) undefined else {},
         async_logger: if (async_mode) ?*AsyncLogger else void = if (async_mode) null else {},
         managed_event_loop: if (async_mode) ?*EventLoop else void = if (async_mode) null else {},
-        managed_event_loop_allocator: if (async_mode) ?std.mem.Allocator else void = if (async_mode) null else {},
 
         pub fn init(output_writer: *std.Io.Writer) Self {
             return initWithRedaction(output_writer, null);
@@ -110,7 +121,6 @@ pub fn OTelLoggerWithRedaction(
                 allocator,
                 null,
                 managed_loop,
-                allocator,
             );
         }
 
@@ -134,7 +144,6 @@ pub fn OTelLoggerWithRedaction(
                 allocator,
                 null,
                 managed_loop,
-                allocator,
             );
         }
 
@@ -150,7 +159,6 @@ pub fn OTelLoggerWithRedaction(
                 try OutputWriter.ownedStderr(allocator, io, buffer_size),
                 io,
                 allocator,
-                null,
                 null,
                 null,
             );
@@ -169,7 +177,6 @@ pub fn OTelLoggerWithRedaction(
                 OutputWriter.borrowedWriter(output_writer),
                 io,
                 allocator,
-                null,
                 null,
                 null,
             );
@@ -203,7 +210,6 @@ pub fn OTelLoggerWithRedaction(
                 allocator,
                 redaction_cfg,
                 managed_loop,
-                allocator,
             );
         }
 
@@ -223,7 +229,6 @@ pub fn OTelLoggerWithRedaction(
                 allocator,
                 redaction_cfg,
                 null,
-                null,
             );
         }
 
@@ -242,7 +247,6 @@ pub fn OTelLoggerWithRedaction(
             allocator: std.mem.Allocator,
             redaction_cfg: ?*const redaction.RedactionConfig,
             managed_event_loop: ?*EventLoop,
-            managed_event_loop_allocator: ?std.mem.Allocator,
         ) !Self {
             const async_logger = try AsyncLogger.init(
                 allocator,
@@ -259,24 +263,26 @@ pub fn OTelLoggerWithRedaction(
                 .resource = otel_config.resource,
                 .instrumentation_scope = otel_config.instrumentation_scope,
                 .output = if (async_mode) {} else unreachable,
-                .allocator = allocator,
                 .async_logger = async_logger,
                 .managed_event_loop = managed_event_loop,
-                .managed_event_loop_allocator = managed_event_loop_allocator,
             };
         }
 
         pub fn deinit(self: *Self) void {
             if (async_mode) {
+                const managed_loop_allocator = if (self.async_logger) |async_logger|
+                    async_logger.allocator
+                else
+                    null;
+
                 if (self.async_logger) |async_logger| {
                     async_logger.destroy();
                     self.async_logger = null;
                 }
                 if (self.managed_event_loop) |managed_loop| {
                     managed_loop.deinit();
-                    if (self.managed_event_loop_allocator) |allocator| allocator.destroy(managed_loop);
+                    if (managed_loop_allocator) |allocator| allocator.destroy(managed_loop);
                     self.managed_event_loop = null;
-                    self.managed_event_loop_allocator = null;
                 }
             } else {
                 self.output.deinit();
@@ -352,30 +358,34 @@ pub fn OTelLoggerWithRedaction(
             if (@intFromEnum(level) < @intFromEnum(self.level)) return;
 
             const InputType = @TypeOf(fields_input);
-            const input_info = @typeInfo(InputType);
 
-            if (comptime isFieldArray(InputType)) {
-                self.logWithTrace(level, message, trace_ctx, fields_input);
+            if (comptime field_input.isFieldArray(InputType)) {
+                self.logWithTrace(
+                    level,
+                    message,
+                    trace_ctx,
+                    field_input.fieldSliceFromInput(fields_input),
+                );
                 return;
             }
 
-            if (input_info == .@"struct") {
-                const fields_array = self.structToFields(fields_input);
-                self.logWithTrace(level, message, trace_ctx, &fields_array);
-                return;
-            }
-
-            if (input_info == .pointer and input_info.pointer.size == .one) {
-                const pointed_info = @typeInfo(input_info.pointer.child);
-                if (pointed_info == .@"struct") {
-                    const fields_array = self.structToFields(fields_input.*);
+            switch (@typeInfo(InputType)) {
+                .@"struct" => {
+                    const fields_array = field_input.structToFields(max_fields, fields_input);
                     self.logWithTrace(level, message, trace_ctx, &fields_array);
                     return;
-                }
-                if (pointed_info == .array and pointed_info.array.child == field.Field) {
-                    self.logWithTrace(level, message, trace_ctx, fields_input);
-                    return;
-                }
+                },
+                .pointer => |pointer_info| {
+                    if (pointer_info.size == .one) {
+                        const pointed_info = @typeInfo(pointer_info.child);
+                        if (pointed_info == .@"struct") {
+                            const fields_array = field_input.structToFields(max_fields, fields_input);
+                            self.logWithTrace(level, message, trace_ctx, &fields_array);
+                            return;
+                        }
+                    }
+                },
+                else => {},
             }
 
             @compileError("Expected struct or field array, got " ++ @typeName(InputType));
@@ -399,8 +409,8 @@ pub fn OTelLoggerWithRedaction(
 
             if (async_mode) {
                 if (self.async_logger) |async_logger| {
-                    const bytes = self.formatLogAlloc(log_record) catch return;
-                    async_logger.enqueue(bytes, level);
+                    const entry = self.formatLogEntry(log_record) catch return;
+                    async_logger.enqueue(entry);
                 }
                 return;
             }
@@ -408,93 +418,14 @@ pub fn OTelLoggerWithRedaction(
             self.formatAndWrite(log_record);
         }
 
-        fn isFieldArray(comptime T: type) bool {
-            const type_info = @typeInfo(T);
-            return switch (type_info) {
-                .pointer => |ptr| blk: {
-                    if (ptr.size == .slice and ptr.child == field.Field) break :blk true;
-                    if (ptr.size == .one) {
-                        const pointed_info = @typeInfo(ptr.child);
-                        if (pointed_info == .array and pointed_info.array.child == field.Field) break :blk true;
-                    }
-                    break :blk false;
-                },
-                else => false,
-            };
-        }
-
-        fn structToFields(self: *const Self, fields_struct: anytype) [getFieldCount(@TypeOf(fields_struct))]field.Field {
-            _ = self;
-            const struct_info = @typeInfo(@TypeOf(fields_struct));
-            const struct_fields = switch (struct_info) {
-                .@"struct" => |struct_type| struct_type.fields,
-                else => @compileError("Expected struct, got " ++ @typeName(@TypeOf(fields_struct))),
-            };
-
-            var result: [struct_fields.len]field.Field = undefined;
-            inline for (struct_fields, 0..) |struct_field, i| {
-                result[i] = convertToField(struct_field.name, @field(fields_struct, struct_field.name));
-            }
-            return result;
-        }
-
-        fn getFieldCount(comptime T: type) comptime_int {
-            const type_info = @typeInfo(T);
-            if (type_info == .@"struct") return type_info.@"struct".fields.len;
-            if (type_info == .pointer and type_info.pointer.size == .one) {
-                const pointed_info = @typeInfo(type_info.pointer.child);
-                if (pointed_info == .@"struct") return pointed_info.@"struct".fields.len;
-                if (pointed_info == .array and pointed_info.array.child == field.Field) return pointed_info.array.len;
-            }
-            @compileError("Expected struct or field array, got " ++ @typeName(T));
-        }
-
-        fn convertToField(comptime name: []const u8, value: anytype) field.Field {
-            const T = @TypeOf(value);
-            const type_info = @typeInfo(T);
-
-            return switch (type_info) {
-                .pointer => |ptr_info| switch (ptr_info.size) {
-                    .slice => if (ptr_info.child == u8)
-                        field.Field.string(name, value)
-                    else
-                        @compileError("Unsupported slice type: " ++ @typeName(T)),
-                    .one => {
-                        const child_info = @typeInfo(ptr_info.child);
-                        if (child_info == .array and child_info.array.child == u8) {
-                            return field.Field.string(name, value);
-                        }
-                        @compileError("Unsupported pointer type: " ++ @typeName(T));
-                    },
-                    else => @compileError("Unsupported pointer type: " ++ @typeName(T)),
-                },
-                .array => |arr_info| if (arr_info.child == u8)
-                    field.Field.string(name, &value)
-                else
-                    @compileError("Unsupported array type: " ++ @typeName(T)),
-                .int => field.Field.int(name, @as(i64, @intCast(value))),
-                .comptime_int => field.Field.int(name, @as(i64, value)),
-                .float => field.Field.float(name, @as(f64, @floatCast(value))),
-                .comptime_float => field.Field.float(name, @as(f64, value)),
-                .bool => field.Field.boolean(name, value),
-                .optional => if (value) |v|
-                    convertToField(name, v)
-                else
-                    field.Field.null_value(name),
-                .null => field.Field.null_value(name),
-                .@"struct" => if (T == field.Field)
-                    value
-                else
-                    @compileError("Unsupported struct type: " ++ @typeName(T)),
-                else => @compileError("Unsupported field type: " ++ @typeName(T)),
-            };
-        }
-
-        fn formatLogAlloc(self: *Self, log_record: otel.LogRecord) ![]u8 {
-            var buffer: [buffer_size]u8 = undefined;
-            var writer: std.Io.Writer = .fixed(&buffer);
+        fn formatLogEntry(self: *Self, log_record: otel.LogRecord) !AsyncEntry {
+            var entry = AsyncEntry.init();
+            var writer: std.Io.Writer = .fixed(&entry.bytes);
             try self.writeRecord(&writer, log_record);
-            return try self.allocator.dupe(u8, writer.buffered());
+            const buffered = writer.buffered();
+            std.debug.assert(buffered.len <= buffer_size);
+            entry.len = @intCast(buffered.len);
+            return entry;
         }
 
         fn formatAndWrite(self: *Self, log_record: otel.LogRecord) void {
@@ -670,24 +601,22 @@ pub fn OTelLoggerWithRedaction(
         const AsyncQueue = struct {
             allocator: std.mem.Allocator,
             entries: []AsyncEntry,
-            read_index: usize = 0,
-            write_index: usize = 0,
-            len: usize = 0,
+            read_index: u32 = 0,
+            write_index: u32 = 0,
+            len: u32 = 0,
             mutex: std.Io.Mutex = .init,
             condition: std.Io.Condition = .init,
 
-            fn init(allocator: std.mem.Allocator, capacity: usize) !AsyncQueue {
+            fn init(allocator: std.mem.Allocator, capacity: u32) !AsyncQueue {
+                std.debug.assert(capacity > 0);
                 return .{
                     .allocator = allocator,
-                    .entries = try allocator.alloc(AsyncEntry, capacity),
+                    .entries = try allocator.alloc(AsyncEntry, @intCast(capacity)),
                 };
             }
 
             fn deinit(self: *AsyncQueue) void {
-                for (0..self.len) |offset| {
-                    const index = (self.read_index + offset) % self.entries.len;
-                    self.allocator.free(self.entries[index].bytes);
-                }
+                std.debug.assert(self.len <= self.entries.len);
                 self.allocator.free(self.entries);
                 self.* = undefined;
             }
@@ -696,20 +625,25 @@ pub fn OTelLoggerWithRedaction(
                 self.mutex.lockUncancelable(io);
                 defer self.mutex.unlock(io);
                 if (self.len == self.entries.len) return false;
-                self.entries[self.write_index] = entry;
-                self.write_index = (self.write_index + 1) % self.entries.len;
+                const write_index: usize = @intCast(self.write_index);
+                self.entries[write_index] = entry;
+                self.write_index = ringAdvance(self.write_index, @intCast(self.entries.len));
                 self.len += 1;
                 self.condition.signal(io);
                 return true;
             }
 
-            fn popBatch(self: *AsyncQueue, io: std.Io, batch: []AsyncEntry) usize {
+            fn popBatch(self: *AsyncQueue, io: std.Io, batch: []AsyncEntry) u32 {
                 self.mutex.lockUncancelable(io);
                 defer self.mutex.unlock(io);
-                const count = @min(self.len, batch.len);
-                for (0..count) |i| {
-                    batch[i] = self.entries[self.read_index];
-                    self.read_index = (self.read_index + 1) % self.entries.len;
+                const batch_len: u32 = @intCast(batch.len);
+                const count = @min(self.len, batch_len);
+                const count_usize: usize = @intCast(count);
+
+                for (0..count_usize) |i| {
+                    const read_index: usize = @intCast(self.read_index);
+                    batch[i] = self.entries[read_index];
+                    self.read_index = ringAdvance(self.read_index, @intCast(self.entries.len));
                 }
                 self.len -= count;
                 if (count > 0) self.condition.broadcast(io);
@@ -721,17 +655,21 @@ pub fn OTelLoggerWithRedaction(
                 io: std.Io,
                 should_stop: *const std.atomic.Value(bool),
                 batch: []AsyncEntry,
-            ) ?usize {
+            ) ?u32 {
                 self.mutex.lockUncancelable(io);
                 defer self.mutex.unlock(io);
                 while (self.len == 0 and !should_stop.load(.acquire)) {
                     self.condition.waitUncancelable(io, &self.mutex);
                 }
                 if (self.len == 0 and should_stop.load(.acquire)) return null;
-                const count = @min(self.len, batch.len);
-                for (0..count) |i| {
-                    batch[i] = self.entries[self.read_index];
-                    self.read_index = (self.read_index + 1) % self.entries.len;
+                const batch_len: u32 = @intCast(batch.len);
+                const count = @min(self.len, batch_len);
+                const count_usize: usize = @intCast(count);
+
+                for (0..count_usize) |i| {
+                    const read_index: usize = @intCast(self.read_index);
+                    batch[i] = self.entries[read_index];
+                    self.read_index = ringAdvance(self.read_index, @intCast(self.entries.len));
                 }
                 self.len -= count;
                 self.condition.broadcast(io);
@@ -747,6 +685,20 @@ pub fn OTelLoggerWithRedaction(
             fn wakeAll(self: *AsyncQueue, io: std.Io) void {
                 self.condition.broadcast(io);
             }
+
+            fn size(self: *AsyncQueue, io: std.Io) u32 {
+                self.mutex.lockUncancelable(io);
+                defer self.mutex.unlock(io);
+                return self.len;
+            }
+
+            fn ringAdvance(index: u32, capacity: u32) u32 {
+                std.debug.assert(capacity > 0);
+                std.debug.assert(index < capacity);
+
+                const next = index + 1;
+                return if (next == capacity) 0 else next;
+            }
         };
 
         const AsyncLogger = struct {
@@ -755,8 +707,10 @@ pub fn OTelLoggerWithRedaction(
             output: OutputWriter,
             queue: AsyncQueue,
             batch: []AsyncEntry,
-            scratch: std.ArrayList(u8) = .empty,
             should_stop: std.atomic.Value(bool) = .init(false),
+            drain_mutex: std.Io.Mutex = .init,
+            drain_condition: std.Io.Condition = .init,
+            write_in_progress: u32 = 0,
             worker_future: std.Io.Future(std.Io.Cancelable!void),
 
             fn init(
@@ -772,7 +726,8 @@ pub fn OTelLoggerWithRedaction(
                 var queue = try AsyncQueue.init(allocator, queue_size);
                 errdefer queue.deinit();
 
-                const batch = try allocator.alloc(AsyncEntry, @max(@as(usize, 1), @min(queue_size, batch_size)));
+                const batch_len = @max(@as(u32, 1), @min(queue_size, batch_size));
+                const batch = try allocator.alloc(AsyncEntry, @intCast(batch_len));
                 errdefer allocator.free(batch);
 
                 self.* = .{
@@ -781,6 +736,7 @@ pub fn OTelLoggerWithRedaction(
                     .output = output,
                     .queue = queue,
                     .batch = batch,
+                    // SAFETY: `worker_future` is assigned immediately after `self.*` initialization and before any read.
                     .worker_future = undefined,
                 };
 
@@ -791,9 +747,10 @@ pub fn OTelLoggerWithRedaction(
             fn destroy(self: *AsyncLogger) void {
                 self.should_stop.store(true, .release);
                 self.queue.wakeAll(self.io);
-                _ = self.worker_future.await(self.io) catch {};
+                _ = self.worker_future.await(self.io) catch |shutdown_err| {
+                    std.debug.panic("otel logger worker shutdown failed: {}", .{shutdown_err});
+                };
                 self.flushPending();
-                self.scratch.deinit(self.allocator);
                 self.output.deinit();
                 self.queue.deinit();
                 self.allocator.free(self.batch);
@@ -801,47 +758,65 @@ pub fn OTelLoggerWithRedaction(
                 allocator.destroy(self);
             }
 
-            fn enqueue(self: *AsyncLogger, bytes: []u8, level: config.Level) void {
-                if (!self.queue.push(self.io, .{ .bytes = bytes, .level = level })) {
-                    self.allocator.free(bytes);
-                }
+            fn enqueue(self: *AsyncLogger, entry: AsyncEntry) void {
+                if (!self.queue.push(self.io, entry)) {}
             }
 
             fn flushPending(self: *AsyncLogger) void {
                 while (true) {
                     const count = self.queue.popBatch(self.io, self.batch);
                     if (count == 0) break;
-                    self.writeBatch(self.batch[0..count]);
+                    self.writeBatchTracked(self.batch[0..count]);
                 }
             }
 
             fn waitUntilDrained(self: *AsyncLogger) void {
-                self.queue.waitUntilEmpty(self.io);
+                while (true) {
+                    self.queue.waitUntilEmpty(self.io);
+                    self.waitUntilIdle();
+                    if (self.queue.size(self.io) == 0) break;
+                }
             }
 
             fn writeBatch(self: *AsyncLogger, entries: []AsyncEntry) void {
-                self.scratch.items.len = 0;
                 for (entries) |entry| {
-                    self.scratch.appendSlice(self.allocator, entry.bytes) catch {
-                        self.output.writeAll(entry.bytes) catch {};
-                        self.output.flush() catch {};
-                        self.allocator.free(entry.bytes);
-                        continue;
-                    };
+                    self.output.writeAll(entry.slice()) catch return;
                 }
-
-                if (self.scratch.items.len > 0) {
-                    self.output.writeAll(self.scratch.items) catch {};
-                    self.output.flush() catch {};
-                }
-
-                for (entries) |entry| self.allocator.free(entry.bytes);
+                self.output.flush() catch return;
             }
 
             fn workerMain(self: *AsyncLogger) std.Io.Cancelable!void {
                 while (true) {
                     const count = self.queue.popBatchBlocking(self.io, &self.should_stop, self.batch) orelse break;
-                    if (count != 0) self.writeBatch(self.batch[0..count]);
+                    if (count != 0) self.writeBatchTracked(self.batch[0..count]);
+                }
+            }
+
+            fn writeBatchTracked(self: *AsyncLogger, entries: []AsyncEntry) void {
+                self.beginWrite();
+                defer self.endWrite();
+                self.writeBatch(entries);
+            }
+
+            fn beginWrite(self: *AsyncLogger) void {
+                self.drain_mutex.lockUncancelable(self.io);
+                defer self.drain_mutex.unlock(self.io);
+                self.write_in_progress += 1;
+            }
+
+            fn endWrite(self: *AsyncLogger) void {
+                self.drain_mutex.lockUncancelable(self.io);
+                defer self.drain_mutex.unlock(self.io);
+                std.debug.assert(self.write_in_progress > 0);
+                self.write_in_progress -= 1;
+                if (self.write_in_progress == 0) self.drain_condition.broadcast(self.io);
+            }
+
+            fn waitUntilIdle(self: *AsyncLogger) void {
+                self.drain_mutex.lockUncancelable(self.io);
+                defer self.drain_mutex.unlock(self.io);
+                while (self.write_in_progress != 0) {
+                    self.drain_condition.waitUncancelable(self.io, &self.drain_mutex);
                 }
             }
         };

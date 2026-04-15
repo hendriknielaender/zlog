@@ -71,7 +71,9 @@ fn runWorkload(logger: anytype, request_count: usize) BenchmarkResult {
         const req_start = support.nowNs();
 
         var request_id_buffer: [24]u8 = undefined;
-        const request_id = std.fmt.bufPrint(&request_id_buffer, "req-{d}", .{i}) catch unreachable;
+        const request_id = std.fmt.bufPrint(&request_id_buffer, "req-{d}", .{i}) catch {
+            @panic("request id buffer overflow");
+        };
         const method = if (i % 3 == 0) "POST" else "GET";
         const endpoint = switch (i % 4) {
             0 => "/api/users",

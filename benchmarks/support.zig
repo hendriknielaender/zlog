@@ -5,7 +5,7 @@ pub fn runtimeIo() std.Io {
 }
 
 pub fn nowNs() i128 {
-    return @as(i128, std.Io.Timestamp.now(runtimeIo(), .awake).nanoseconds);
+    return std.Io.Timestamp.now(runtimeIo(), .awake).nanoseconds;
 }
 
 pub fn nowMs() i64 {
@@ -13,7 +13,9 @@ pub fn nowMs() i64 {
 }
 
 pub fn sleepMs(ms: i64) void {
-    runtimeIo().sleep(.fromMilliseconds(ms), .awake) catch {};
+    runtimeIo().sleep(.fromMilliseconds(ms), .awake) catch |err| {
+        std.debug.panic("benchmark sleep failed: {}", .{err});
+    };
 }
 
 pub fn nsToMs(ns: i128) f64 {
@@ -59,8 +61,8 @@ pub const LatencyWriter = struct {
 };
 
 fn busyWait(io: std.Io, ns: i128) void {
-    const start = @as(i128, std.Io.Timestamp.now(io, .awake).nanoseconds);
-    while (@as(i128, std.Io.Timestamp.now(io, .awake).nanoseconds) - start < ns) {
+    const start: i128 = std.Io.Timestamp.now(io, .awake).nanoseconds;
+    while (std.Io.Timestamp.now(io, .awake).nanoseconds - start < ns) {
         std.atomic.spinLoopHint();
     }
 }

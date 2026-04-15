@@ -24,7 +24,7 @@ pub const Span = struct {
         assert(parent_span_bytes == null or !trace_mod.is_all_zero_id(parent_span_bytes.?[0..]));
 
         const span_trace_context = trace_ctx.createChild(trace_ctx.trace_flags.sampled);
-        const timestamp_ns: i128 = @as(i128, std.Io.Timestamp.now(runtimeIo(), .awake).nanoseconds);
+        const timestamp_ns: i128 = std.Io.Timestamp.now(runtimeIo(), .awake).nanoseconds;
         const thread_id_current = std.Thread.getCurrentId();
 
         const span_id_legacy = std.mem.readInt(u64, &span_trace_context.parent_id, .big);
@@ -52,37 +52,53 @@ pub const Span = struct {
     }
 };
 
+const SpanStack = struct {
+    data: [32][8]u8,
+    len: u32,
+
+    pub fn init() SpanStack {
+        // SAFETY: The stack starts empty, so `data` is never read until `append` writes it.
+        var span_stack: SpanStack = undefined;
+        span_stack.len = 0;
+        return span_stack;
+    }
+
+    pub fn append(self: *SpanStack, span_id_bytes: [8]u8) !void {
+        assert(self.len <= self.capacity());
+        if (self.len == self.capacity()) return error.Overflow;
+
+        const write_index: usize = @intCast(self.len);
+        self.data[write_index] = span_id_bytes;
+        self.len += 1;
+
+        assert(self.len <= self.capacity());
+    }
+
+    pub fn pop(self: *SpanStack) ?[8]u8 {
+        assert(self.len <= self.capacity());
+        if (self.len == 0) return null;
+
+        self.len -= 1;
+        const read_index: usize = @intCast(self.len);
+        return self.data[read_index];
+    }
+
+    pub fn get(self: *const SpanStack, index: u32) [8]u8 {
+        assert(index < self.len);
+
+        const read_index: usize = @intCast(index);
+        return self.data[read_index];
+    }
+
+    pub fn capacity(self: *const SpanStack) u32 {
+        _ = self;
+        return 32;
+    }
+};
+
 pub const TaskContext = struct {
     trace_context: trace_mod.TraceContext,
-    span_stack: struct {
-        data: [32][8]u8 = undefined,
-        len: usize = 0,
-
-        pub fn append(self: *@This(), item: [8]u8) !void {
-            if (self.len >= 32) return error.Overflow;
-            self.data[self.len] = item;
-            self.len += 1;
-        }
-
-        pub fn pop(self: *@This()) ?[8]u8 {
-            if (self.len == 0) return null;
-            self.len -= 1;
-            return self.data[self.len];
-        }
-
-        pub fn slice(self: *const @This()) [][8]u8 {
-            return self.data[0..self.len];
-        }
-
-        pub fn get(self: *const @This(), index: usize) [8]u8 {
-            return self.data[index];
-        }
-
-        pub fn capacity(self: *const @This()) usize {
-            _ = self;
-            return 32;
-        }
-    } = .{},
+    span_stack: SpanStack = SpanStack.init(),
 
     id: u64,
     parent_id: ?u64,
@@ -91,14 +107,13 @@ pub const TaskContext = struct {
         assert(parent_context_id == null or parent_context_id.? >= 1);
 
         const trace_ctx = trace_mod.TraceContext.init(false);
-        const span_stack_empty = @TypeOf(@as(TaskContext, undefined).span_stack){};
 
         const legacy_task_id = trace_mod.extract_short_from_trace_id(trace_ctx.trace_id);
         const legacy_parent_id = if (parent_context_id) |pid| pid else null;
 
         const context_result = TaskContext{
             .trace_context = trace_ctx,
-            .span_stack = span_stack_empty,
+            .span_stack = SpanStack.init(),
             .id = legacy_task_id,
             .parent_id = legacy_parent_id,
         };
@@ -113,12 +128,11 @@ pub const TaskContext = struct {
         assert(trace_ctx.version == 0x00);
         assert(!trace_mod.is_all_zero_id(trace_ctx.trace_id[0..]));
 
-        const span_stack_empty = std.BoundedArray([8]u8, 32).init(0) catch @panic("BoundedArray init failed with valid capacity");
         const legacy_task_id = trace_mod.extract_short_from_trace_id(trace_ctx.trace_id);
 
         const context_result = TaskContext{
             .trace_context = trace_ctx,
-            .span_stack = span_stack_empty,
+            .span_stack = SpanStack.init(),
             .id = legacy_task_id,
             .parent_id = null,
         };

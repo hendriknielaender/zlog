@@ -21,7 +21,7 @@ pub fn main() !void {
             zlog.field.string("user_id", "12345"),
             zlog.field.string("action", "login"),
             zlog.field.int("ts", @as(i64, @intCast(i))),
-        }) catch unreachable;
+        }) catch @panic("isolated serialization buffer overflow");
         serialize_ns += @as(u64, @intCast(support.nowNs() - start));
     }
 
@@ -37,7 +37,7 @@ pub fn main() !void {
     var mutex: std.Io.Mutex = .init;
     for (0..iterations) |_| {
         const start = support.nowNs();
-        mutex.lock(io) catch unreachable;
+        mutex.lock(io) catch @panic("isolated mutex lock failed");
         std.mem.doNotOptimizeAway(dummy_json.len);
         mutex.unlock(io);
         mutex_ns += @as(u64, @intCast(support.nowNs() - start));

@@ -18,9 +18,11 @@ pub const OutputWriter = union(enum) {
         allocator: std.mem.Allocator,
         io: std.Io,
         file: std.Io.File,
-        buffer_size: usize,
+        buffer_size: u32,
     ) !OutputWriter {
-        const buffer = try allocator.alloc(u8, buffer_size);
+        std.debug.assert(buffer_size > 0);
+
+        const buffer = try allocator.alloc(u8, @intCast(buffer_size));
         return .{
             .owned_file = .{
                 .allocator = allocator,
@@ -33,7 +35,7 @@ pub const OutputWriter = union(enum) {
     pub fn ownedStderr(
         allocator: std.mem.Allocator,
         io: std.Io,
-        buffer_size: usize,
+        buffer_size: u32,
     ) !OutputWriter {
         return ownedFile(allocator, io, std.Io.File.stderr(), buffer_size);
     }
@@ -57,7 +59,9 @@ pub const OutputWriter = union(enum) {
         switch (self.*) {
             .borrowed => {},
             .owned_file => |*owned| {
-                owned.file_writer.interface.flush() catch {};
+                owned.file_writer.interface.flush() catch |err| {
+                    std.debug.panic("owned output writer flush failed during deinit: {}", .{err});
+                };
                 owned.allocator.free(owned.buffer);
             },
         }

@@ -11,8 +11,8 @@ pub fn main() !void {
 
     const iterations = 50_000;
     const zlog_ns = benchZlog(iterations);
-    const alloc_print_ns = benchAllocPrint(allocator, iterations);
-    const buf_print_ns = benchBufPrint(iterations);
+    const alloc_print_ns = try benchAllocPrint(allocator, iterations);
+    const buf_print_ns = try benchBufPrint(iterations);
 
     printCase("zlog sync logger", iterations, zlog_ns);
     printCase("std.fmt.allocPrint", iterations, alloc_print_ns);
@@ -41,32 +41,32 @@ fn benchZlog(iterations: usize) i128 {
     return support.nowNs() - start;
 }
 
-fn benchAllocPrint(allocator: std.mem.Allocator, iterations: usize) i128 {
+fn benchAllocPrint(allocator: std.mem.Allocator, iterations: usize) !i128 {
     const start = support.nowNs();
     for (0..iterations) |i| {
-        const line = std.fmt.allocPrint(
+        const line = try std.fmt.allocPrint(
             allocator,
             "{{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":{d}}}\n",
             .{i},
-        ) catch unreachable;
+        );
         allocator.free(line);
     }
     return support.nowNs() - start;
 }
 
-fn benchBufPrint(iterations: usize) i128 {
+fn benchBufPrint(iterations: usize) !i128 {
     var sink_buffer: [256]u8 = undefined;
     var sink = std.Io.Writer.Discarding.init(&sink_buffer);
     var line_buffer: [160]u8 = undefined;
 
     const start = support.nowNs();
     for (0..iterations) |i| {
-        const line = std.fmt.bufPrint(
+        const line = try std.fmt.bufPrint(
             &line_buffer,
             "{{\"level\":\"Info\",\"message\":\"User action\",\"user_id\":\"12345\",\"action\":\"login\",\"timestamp\":{d}}}\n",
             .{i},
-        ) catch unreachable;
-        sink.writer.writeAll(line) catch unreachable;
+        );
+        try sink.writer.writeAll(line);
     }
     return support.nowNs() - start;
 }

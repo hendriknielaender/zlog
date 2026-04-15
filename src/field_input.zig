@@ -40,14 +40,13 @@ pub fn structToFields(
     comptime max_fields: u16,
     fields_struct: anytype,
 ) [fieldCount(@TypeOf(fields_struct))]field.Field {
-    const T = @TypeOf(fields_struct);
-    const type_info = @typeInfo(T);
+    const StructType = comptime structType(@TypeOf(fields_struct));
+    const struct_value = if (comptime @TypeOf(fields_struct) == StructType)
+        fields_struct
+    else
+        fields_struct.*;
 
-    if (type_info != .@"struct") {
-        @compileError("Expected struct, got " ++ @typeName(T));
-    }
-
-    const field_count = comptime fieldCount(T);
+    const field_count = comptime fieldCount(StructType);
     comptime {
         if (field_count > max_fields) {
             @compileError(
@@ -60,8 +59,8 @@ pub fn structToFields(
     }
 
     var result: [field_count]field.Field = undefined;
-    var field_index: usize = 0;
-    appendStructFields("", fields_struct, result[0..], &field_index);
+    var field_index: u32 = 0;
+    appendStructFields("", struct_value, result[0..], &field_index);
 
     assert(field_index == result.len);
     return result;
@@ -117,6 +116,24 @@ fn countStructFields(comptime T: type) comptime_int {
     return field_count;
 }
 
+fn structType(comptime T: type) type {
+    const type_info = @typeInfo(T);
+
+    if (type_info == .@"struct") {
+        return T;
+    }
+
+    if (type_info == .pointer and type_info.pointer.size == .one) {
+        const pointed_type = type_info.pointer.child;
+        const pointed_info = @typeInfo(pointed_type);
+        if (pointed_info == .@"struct") {
+            return pointed_type;
+        }
+    }
+
+    @compileError("Expected struct or pointer to struct, got " ++ @typeName(T));
+}
+
 fn countValueFields(comptime T: type) comptime_int {
     if (T == field.Field) {
         return 1;
@@ -143,7 +160,7 @@ fn appendStructFields(
     comptime key_prefix: []const u8,
     fields_struct: anytype,
     target: []field.Field,
-    field_index: *usize,
+    field_index: *u32,
 ) void {
     const struct_info = @typeInfo(@TypeOf(fields_struct));
     assert(struct_info == .@"struct");
@@ -159,7 +176,7 @@ fn appendValueField(
     comptime field_name: []const u8,
     value: anytype,
     target: []field.Field,
-    field_index: *usize,
+    field_index: *u32,
 ) void {
     const T = @TypeOf(value);
     if (T == field.Field) {
@@ -194,9 +211,10 @@ fn appendValueField(
     );
 }
 
-fn appendField(target: []field.Field, field_index: *usize, field_item: field.Field) void {
-    assert(field_index.* < target.len);
-    target[field_index.*] = field_item;
+fn appendField(target: []field.Field, field_index: *u32, field_item: field.Field) void {
+    const index: usize = @intCast(field_index.*);
+    assert(index < target.len);
+    target[index] = field_item;
     field_index.* += 1;
 }
 

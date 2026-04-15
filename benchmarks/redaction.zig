@@ -8,8 +8,8 @@ pub fn main() !void {
     std.debug.print("=== Redaction Benchmark ===\n\n", .{});
 
     const baseline_ns = benchmarkBaseline(150_000);
-    const redacted_ns = benchmarkWithRedaction(150_000);
-    const dense_redaction_ns = benchmarkDenseRedaction(150_000);
+    const redacted_ns = try benchmarkWithRedaction(150_000);
+    const dense_redaction_ns = try benchmarkDenseRedaction(150_000);
 
     printCase("baseline", 150_000, baseline_ns);
     printCase("runtime redaction", 150_000, redacted_ns);
@@ -36,12 +36,12 @@ fn benchmarkBaseline(iterations: usize) i128 {
     return support.nowNs() - start;
 }
 
-fn benchmarkWithRedaction(iterations: usize) i128 {
+fn benchmarkWithRedaction(iterations: usize) !i128 {
     var redaction_storage: [8][]const u8 = undefined;
     var redaction_config = zlog.RedactionConfig.init(&redaction_storage);
     defer redaction_config.deinit();
-    redaction_config.addKey("password") catch unreachable;
-    redaction_config.addKey("api_key") catch unreachable;
+    try redaction_config.addKey("password");
+    try redaction_config.addKey("api_key");
 
     var sink_buffer: [256]u8 = undefined;
     var sink = std.Io.Writer.Discarding.init(&sink_buffer);
@@ -62,12 +62,12 @@ fn benchmarkWithRedaction(iterations: usize) i128 {
     return support.nowNs() - start;
 }
 
-fn benchmarkDenseRedaction(iterations: usize) i128 {
+fn benchmarkDenseRedaction(iterations: usize) !i128 {
     var redaction_storage: [16][]const u8 = undefined;
     var redaction_config = zlog.RedactionConfig.init(&redaction_storage);
     defer redaction_config.deinit();
     for ([_][]const u8{ "ssn", "credit_card", "cvv", "pin", "password", "api_key", "secret_token" }) |key| {
-        redaction_config.addKey(key) catch unreachable;
+        try redaction_config.addKey(key);
     }
 
     var sink_buffer: [256]u8 = undefined;

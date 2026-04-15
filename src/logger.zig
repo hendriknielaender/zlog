@@ -2,6 +2,7 @@ const std = @import("std");
 
 const config = @import("config.zig");
 const field = @import("field.zig");
+const field_input = @import("field_input.zig");
 const trace_mod = @import("trace.zig");
 const correlation = @import("correlation.zig");
 const redaction = @import("redaction.zig");
@@ -44,18 +45,28 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
         const compile_time_redacted_fields = redaction_options.redacted_fields;
 
         const AsyncEntry = struct {
-            bytes: []u8,
-            level: config.Level,
+            bytes: [buffer_size]u8,
+            len: u32,
+
+            fn init() AsyncEntry {
+                // SAFETY: `bytes` are written before `slice` exposes any of them, and `len` starts at 0.
+                var entry: AsyncEntry = undefined;
+                entry.len = 0;
+                return entry;
+            }
+
+            fn slice(self: *const AsyncEntry) []const u8 {
+                std.debug.assert(self.len <= buffer_size);
+                return self.bytes[0..self.len];
+            }
         };
 
         level: config.Level,
         redaction_config: ?*const redaction.RedactionConfig,
         mutex: if (async_mode) void else std.Io.Mutex = if (async_mode) {} else .init,
         output: if (async_mode) void else OutputWriter,
-        allocator: if (async_mode) std.mem.Allocator else void = if (async_mode) undefined else {},
         async_logger: if (async_mode) ?*AsyncLogger else void = if (async_mode) null else {},
         managed_event_loop: if (async_mode) ?*EventLoop else void = if (async_mode) null else {},
-        managed_event_loop_allocator: if (async_mode) ?std.mem.Allocator else void = if (async_mode) null else {},
 
         pub fn init(output_writer: *std.Io.Writer) Self {
             return initWithRedaction(output_writer, null);
@@ -115,7 +126,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 allocator,
                 null,
                 managed_loop,
-                allocator,
             );
         }
 
@@ -139,7 +149,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 allocator,
                 null,
                 managed_loop,
-                allocator,
             );
         }
 
@@ -155,7 +164,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 try OutputWriter.ownedStderr(allocator, io, buffer_size),
                 io,
                 allocator,
-                null,
                 null,
                 null,
             );
@@ -176,7 +184,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 allocator,
                 null,
                 null,
-                null,
             );
         }
 
@@ -193,7 +200,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 OutputWriter.borrowedWriter(output_writer),
                 event_loop.io(),
                 allocator,
-                null,
                 null,
                 null,
             );
@@ -219,7 +225,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 allocator,
                 redaction_cfg,
                 managed_loop,
-                allocator,
             );
         }
 
@@ -238,7 +243,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 io,
                 allocator,
                 redaction_cfg,
-                null,
                 null,
             );
         }
@@ -259,7 +263,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 allocator,
                 redaction_cfg,
                 null,
-                null,
             );
         }
 
@@ -269,7 +272,6 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             allocator: std.mem.Allocator,
             redaction_cfg: ?*const redaction.RedactionConfig,
             managed_event_loop: ?*EventLoop,
-            managed_event_loop_allocator: ?std.mem.Allocator,
         ) !Self {
             const async_logger = try AsyncLogger.init(
                 allocator,
@@ -284,26 +286,28 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 .level = cfg.level,
                 .redaction_config = redaction_cfg,
                 .output = if (async_mode) {} else unreachable,
-                .allocator = allocator,
                 .async_logger = async_logger,
                 .managed_event_loop = managed_event_loop,
-                .managed_event_loop_allocator = managed_event_loop_allocator,
             };
         }
 
         pub fn deinit(self: *Self) void {
             if (async_mode) {
+                const managed_loop_allocator = if (self.async_logger) |async_logger|
+                    async_logger.allocator
+                else
+                    null;
+
                 if (self.async_logger) |async_logger| {
                     async_logger.destroy();
                     self.async_logger = null;
                 }
                 if (self.managed_event_loop) |managed_loop| {
                     managed_loop.deinit();
-                    if (self.managed_event_loop_allocator) |allocator| {
+                    if (managed_loop_allocator) |allocator| {
                         allocator.destroy(managed_loop);
                     }
                     self.managed_event_loop = null;
-                    self.managed_event_loop_allocator = null;
                 }
             } else {
                 self.output.deinit();
@@ -390,7 +394,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             const current_context = correlation.getCurrentTaskContext();
             const span = correlation.Span.init(operation_name, current_context.currentSpan(), current_context.trace_context);
 
-            var fields_array = tryBuildSpanStartFields(self, span, operation_fields_struct);
+            var fields_array = tryBuildSpanStartFields(span, operation_fields_struct);
             const default_trace_ctx = trace_mod.TraceContext.init(false);
             self.logWithTrace(.info, operation_name, default_trace_ctx, fields_array.constSlice());
 
@@ -401,71 +405,70 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             const span_end_time_ns = monotonicNowNs();
             const span_duration_ns = span_end_time_ns - completed_span.start_time;
 
-            var fields_array = tryBuildSpanEndFields(self, completed_span, span_duration_ns, completion_fields_struct);
+            var fields_array = tryBuildSpanEndFields(completed_span, span_duration_ns, completion_fields_struct);
             const default_trace_ctx = trace_mod.TraceContext.init(false);
             self.logWithTrace(.info, completed_span.name, default_trace_ctx, fields_array.constSlice());
         }
 
-        const SpanStartFields = struct {
-            data: [max_fields + 4]field.Field = undefined,
-            len: usize = 0,
+        const SpanStartFields = FieldBuffer(max_fields + 4);
+        const SpanEndFields = FieldBuffer(max_fields + 5);
 
-            fn append(self: *@This(), item: field.Field) void {
-                if (self.len >= self.data.len) return;
-                self.data[self.len] = item;
-                self.len += 1;
+        fn FieldBuffer(comptime capacity: u16) type {
+            comptime {
+                std.debug.assert(capacity > 0);
             }
 
-            fn constSlice(self: *const @This()) []const field.Field {
-                return self.data[0..self.len];
-            }
-        };
+            return struct {
+                data: [capacity]field.Field,
+                len: u16,
 
-        const SpanEndFields = struct {
-            data: [max_fields + 5]field.Field = undefined,
-            len: usize = 0,
+                fn init() @This() {
+                    // SAFETY: `data` elements are initialized before `constSlice` exposes them, and `len` starts at 0.
+                    var buffer: @This() = undefined;
+                    buffer.len = 0;
+                    return buffer;
+                }
 
-            fn append(self: *@This(), item: field.Field) void {
-                if (self.len >= self.data.len) return;
-                self.data[self.len] = item;
-                self.len += 1;
-            }
+                fn append(self: *@This(), field_item: field.Field) void {
+                    const index: usize = @intCast(self.len);
+                    std.debug.assert(index < self.data.len);
+                    self.data[index] = field_item;
+                    self.len += 1;
+                }
 
-            fn constSlice(self: *const @This()) []const field.Field {
-                return self.data[0..self.len];
-            }
-        };
+                fn constSlice(self: *const @This()) []const field.Field {
+                    const len: usize = @intCast(self.len);
+                    std.debug.assert(len <= self.data.len);
+                    return self.data[0..len];
+                }
+            };
+        }
 
-        fn tryBuildSpanStartFields(
-            self: *Self,
-            span: correlation.Span,
-            operation_fields_struct: anytype,
-        ) SpanStartFields {
-            var fields_array = SpanStartFields{};
+        fn tryBuildSpanStartFields(span: correlation.Span, operation_fields_struct: anytype) SpanStartFields {
+            var fields_array = SpanStartFields.init();
             fields_array.append(field.Field.string("span_mark", "start"));
             fields_array.append(field.Field.uint("span_id", span.id));
             fields_array.append(field.Field.uint("task_id", span.task_id));
             fields_array.append(field.Field.uint("thread_id", span.thread_id));
 
-            const extra_fields = self.structToFields(operation_fields_struct);
+            const extra_fields = field_input.structToFields(max_fields, operation_fields_struct);
             for (extra_fields) |item| fields_array.append(item);
             return fields_array;
         }
 
         fn tryBuildSpanEndFields(
-            self: *Self,
             span: correlation.Span,
             duration_ns: i128,
             completion_fields_struct: anytype,
         ) SpanEndFields {
-            var fields_array = SpanEndFields{};
+            var fields_array = SpanEndFields.init();
             fields_array.append(field.Field.string("span_mark", "end"));
             fields_array.append(field.Field.uint("span_id", span.id));
             fields_array.append(field.Field.uint("task_id", span.task_id));
             fields_array.append(field.Field.uint("thread_id", span.thread_id));
             fields_array.append(field.Field.uint("duration_ns", @as(u64, @intCast(duration_ns))));
 
-            const extra_fields = self.structToFields(completion_fields_struct);
+            const extra_fields = field_input.structToFields(max_fields, completion_fields_struct);
             for (extra_fields) |item| fields_array.append(item);
             return fields_array;
         }
@@ -480,115 +483,37 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             if (!cfg.enable_logging) return;
 
             const InputType = @TypeOf(fields_input);
-            const input_info = @typeInfo(InputType);
 
-            if (comptime isFieldArray(InputType)) {
-                self.logWithTrace(level, message, trace_ctx, fields_input);
+            if (comptime field_input.isFieldArray(InputType)) {
+                self.logWithTrace(
+                    level,
+                    message,
+                    trace_ctx,
+                    field_input.fieldSliceFromInput(fields_input),
+                );
                 return;
             }
 
-            if (input_info == .@"struct") {
-                const fields_array = self.structToFields(fields_input);
-                self.logWithTrace(level, message, trace_ctx, &fields_array);
-                return;
-            }
-
-            if (input_info == .pointer and input_info.pointer.size == .one) {
-                const pointed_info = @typeInfo(input_info.pointer.child);
-                if (pointed_info == .@"struct") {
-                    const fields_array = self.structToFields(fields_input.*);
+            switch (@typeInfo(InputType)) {
+                .@"struct" => {
+                    const fields_array = field_input.structToFields(max_fields, fields_input);
                     self.logWithTrace(level, message, trace_ctx, &fields_array);
                     return;
-                }
-                if (pointed_info == .array and pointed_info.array.child == field.Field) {
-                    self.logWithTrace(level, message, trace_ctx, fields_input);
-                    return;
-                }
+                },
+                .pointer => |pointer_info| {
+                    if (pointer_info.size == .one) {
+                        const pointed_info = @typeInfo(pointer_info.child);
+                        if (pointed_info == .@"struct") {
+                            const fields_array = field_input.structToFields(max_fields, fields_input);
+                            self.logWithTrace(level, message, trace_ctx, &fields_array);
+                            return;
+                        }
+                    }
+                },
+                else => {},
             }
 
             @compileError("Expected struct or field array, got " ++ @typeName(InputType));
-        }
-
-        fn isFieldArray(comptime T: type) bool {
-            const type_info = @typeInfo(T);
-            return switch (type_info) {
-                .pointer => |ptr| blk: {
-                    if (ptr.size == .slice and ptr.child == field.Field) break :blk true;
-                    if (ptr.size == .one) {
-                        const pointed_info = @typeInfo(ptr.child);
-                        if (pointed_info == .array and pointed_info.array.child == field.Field) break :blk true;
-                    }
-                    break :blk false;
-                },
-                else => false,
-            };
-        }
-
-        fn structToFields(self: *const Self, fields_struct: anytype) [getFieldCount(@TypeOf(fields_struct))]field.Field {
-            _ = self;
-            const struct_info = @typeInfo(@TypeOf(fields_struct));
-            const struct_fields = switch (struct_info) {
-                .@"struct" => |struct_type| struct_type.fields,
-                else => @compileError("Expected struct, got " ++ @typeName(@TypeOf(fields_struct))),
-            };
-
-            var result: [struct_fields.len]field.Field = undefined;
-            inline for (struct_fields, 0..) |struct_field, i| {
-                result[i] = convertToField(struct_field.name, @field(fields_struct, struct_field.name));
-            }
-            return result;
-        }
-
-        fn getFieldCount(comptime T: type) comptime_int {
-            const type_info = @typeInfo(T);
-            if (type_info == .@"struct") return type_info.@"struct".fields.len;
-            if (type_info == .pointer and type_info.pointer.size == .one) {
-                const pointed_info = @typeInfo(type_info.pointer.child);
-                if (pointed_info == .@"struct") return pointed_info.@"struct".fields.len;
-                if (pointed_info == .array and pointed_info.array.child == field.Field) return pointed_info.array.len;
-            }
-            @compileError("Expected struct or field array, got " ++ @typeName(T));
-        }
-
-        fn convertToField(comptime name: []const u8, value: anytype) field.Field {
-            const T = @TypeOf(value);
-            const type_info = @typeInfo(T);
-
-            return switch (type_info) {
-                .pointer => |ptr_info| switch (ptr_info.size) {
-                    .slice => if (ptr_info.child == u8)
-                        field.Field.string(name, value)
-                    else
-                        @compileError("Unsupported slice type: " ++ @typeName(T)),
-                    .one => {
-                        const child_info = @typeInfo(ptr_info.child);
-                        if (child_info == .array and child_info.array.child == u8) {
-                            return field.Field.string(name, value);
-                        }
-                        @compileError("Unsupported pointer type: " ++ @typeName(T));
-                    },
-                    else => @compileError("Unsupported pointer type: " ++ @typeName(T)),
-                },
-                .array => |arr_info| if (arr_info.child == u8)
-                    field.Field.string(name, &value)
-                else
-                    @compileError("Unsupported array type: " ++ @typeName(T)),
-                .int => field.Field.int(name, @as(i64, @intCast(value))),
-                .comptime_int => field.Field.int(name, @as(i64, value)),
-                .float => field.Field.float(name, @as(f64, @floatCast(value))),
-                .comptime_float => field.Field.float(name, @as(f64, value)),
-                .bool => field.Field.boolean(name, value),
-                .optional => if (value) |v|
-                    convertToField(name, v)
-                else
-                    field.Field.null_value(name),
-                .null => field.Field.null_value(name),
-                .@"struct" => if (T == field.Field)
-                    value
-                else
-                    @compileError("Unsupported struct type: " ++ @typeName(T)),
-                else => @compileError("Unsupported field type: " ++ @typeName(T)),
-            };
         }
 
         fn logWithTrace(
@@ -603,8 +528,8 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
 
             if (async_mode) {
                 if (self.async_logger) |async_logger| {
-                    const bytes = self.formatLogAlloc(level, message, trace_ctx, fields) catch return;
-                    async_logger.enqueue(bytes, level);
+                    const entry = self.formatLogEntry(level, message, trace_ctx, fields) catch return;
+                    async_logger.enqueue(entry);
                 }
                 return;
             }
@@ -612,17 +537,20 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             self.formatAndWriteLog(level, message, trace_ctx, fields);
         }
 
-        fn formatLogAlloc(
+        fn formatLogEntry(
             self: *Self,
             level: config.Level,
             message: []const u8,
             trace_ctx: trace_mod.TraceContext,
             fields: []const field.Field,
-        ) ![]u8 {
-            var buffer: [buffer_size]u8 = undefined;
-            var writer: std.Io.Writer = .fixed(&buffer);
+        ) !AsyncEntry {
+            var entry = AsyncEntry.init();
+            var writer: std.Io.Writer = .fixed(&entry.bytes);
             try self.writeFormatted(&writer, level, message, trace_ctx, fields);
-            return try self.allocator.dupe(u8, writer.buffered());
+            const buffered = writer.buffered();
+            std.debug.assert(buffered.len <= buffer_size);
+            entry.len = @intCast(buffered.len);
+            return entry;
         }
 
         fn formatAndWriteLog(
@@ -739,24 +667,22 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
         const AsyncQueue = struct {
             allocator: std.mem.Allocator,
             entries: []AsyncEntry,
-            read_index: usize = 0,
-            write_index: usize = 0,
-            len: usize = 0,
+            read_index: u32 = 0,
+            write_index: u32 = 0,
+            len: u32 = 0,
             mutex: std.Io.Mutex = .init,
             condition: std.Io.Condition = .init,
 
-            fn init(allocator: std.mem.Allocator, capacity: usize) !AsyncQueue {
+            fn init(allocator: std.mem.Allocator, capacity: u32) !AsyncQueue {
+                std.debug.assert(capacity > 0);
                 return .{
                     .allocator = allocator,
-                    .entries = try allocator.alloc(AsyncEntry, capacity),
+                    .entries = try allocator.alloc(AsyncEntry, @intCast(capacity)),
                 };
             }
 
             fn deinit(self: *AsyncQueue) void {
-                for (0..self.len) |offset| {
-                    const index = (self.read_index + offset) % self.entries.len;
-                    self.allocator.free(self.entries[index].bytes);
-                }
+                std.debug.assert(self.len <= self.entries.len);
                 self.allocator.free(self.entries);
                 self.* = undefined;
             }
@@ -767,21 +693,26 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
 
                 if (self.len == self.entries.len) return false;
 
-                self.entries[self.write_index] = entry;
-                self.write_index = (self.write_index + 1) % self.entries.len;
+                const write_index: usize = @intCast(self.write_index);
+                self.entries[write_index] = entry;
+                self.write_index = ringAdvance(self.write_index, @intCast(self.entries.len));
                 self.len += 1;
                 self.condition.signal(io);
                 return true;
             }
 
-            fn popBatch(self: *AsyncQueue, io: std.Io, batch: []AsyncEntry) usize {
+            fn popBatch(self: *AsyncQueue, io: std.Io, batch: []AsyncEntry) u32 {
                 self.mutex.lockUncancelable(io);
                 defer self.mutex.unlock(io);
 
-                const count = @min(self.len, batch.len);
-                for (0..count) |i| {
-                    batch[i] = self.entries[self.read_index];
-                    self.read_index = (self.read_index + 1) % self.entries.len;
+                const batch_len: u32 = @intCast(batch.len);
+                const count = @min(self.len, batch_len);
+                const count_usize: usize = @intCast(count);
+
+                for (0..count_usize) |i| {
+                    const read_index: usize = @intCast(self.read_index);
+                    batch[i] = self.entries[read_index];
+                    self.read_index = ringAdvance(self.read_index, @intCast(self.entries.len));
                 }
                 self.len -= count;
                 if (count > 0) self.condition.broadcast(io);
@@ -793,7 +724,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 io: std.Io,
                 should_stop: *const std.atomic.Value(bool),
                 batch: []AsyncEntry,
-            ) ?usize {
+            ) ?u32 {
                 self.mutex.lockUncancelable(io);
                 defer self.mutex.unlock(io);
 
@@ -803,10 +734,14 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
 
                 if (self.len == 0 and should_stop.load(.acquire)) return null;
 
-                const count = @min(self.len, batch.len);
-                for (0..count) |i| {
-                    batch[i] = self.entries[self.read_index];
-                    self.read_index = (self.read_index + 1) % self.entries.len;
+                const batch_len: u32 = @intCast(batch.len);
+                const count = @min(self.len, batch_len);
+                const count_usize: usize = @intCast(count);
+
+                for (0..count_usize) |i| {
+                    const read_index: usize = @intCast(self.read_index);
+                    batch[i] = self.entries[read_index];
+                    self.read_index = ringAdvance(self.read_index, @intCast(self.entries.len));
                 }
                 self.len -= count;
                 self.condition.broadcast(io);
@@ -825,10 +760,18 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 self.condition.broadcast(io);
             }
 
-            fn size(self: *AsyncQueue, io: std.Io) usize {
+            fn size(self: *AsyncQueue, io: std.Io) u32 {
                 self.mutex.lockUncancelable(io);
                 defer self.mutex.unlock(io);
                 return self.len;
+            }
+
+            fn ringAdvance(index: u32, capacity: u32) u32 {
+                std.debug.assert(capacity > 0);
+                std.debug.assert(index < capacity);
+
+                const next = index + 1;
+                return if (next == capacity) 0 else next;
             }
         };
 
@@ -838,8 +781,10 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             output: OutputWriter,
             queue: AsyncQueue,
             batch: []AsyncEntry,
-            scratch: std.ArrayList(u8) = .empty,
             should_stop: std.atomic.Value(bool) = .init(false),
+            drain_mutex: std.Io.Mutex = .init,
+            drain_condition: std.Io.Condition = .init,
+            write_in_progress: u32 = 0,
             worker_future: std.Io.Future(std.Io.Cancelable!void),
             logs_written: std.atomic.Value(u64) = .init(0),
             logs_dropped: std.atomic.Value(u64) = .init(0),
@@ -858,7 +803,8 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 var queue = try AsyncQueue.init(allocator, queue_size);
                 errdefer queue.deinit();
 
-                const batch = try allocator.alloc(AsyncEntry, @max(@as(usize, 1), @min(queue_size, batch_size)));
+                const batch_len = @max(@as(u32, 1), @min(queue_size, batch_size));
+                const batch = try allocator.alloc(AsyncEntry, @intCast(batch_len));
                 errdefer allocator.free(batch);
 
                 self.* = .{
@@ -867,6 +813,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                     .output = output,
                     .queue = queue,
                     .batch = batch,
+                    // SAFETY: `worker_future` is assigned immediately after `self.*` initialization and before any read.
                     .worker_future = undefined,
                 };
 
@@ -877,9 +824,10 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             fn destroy(self: *AsyncLogger) void {
                 self.should_stop.store(true, .release);
                 self.queue.wakeAll(self.io);
-                _ = self.worker_future.await(self.io) catch {};
+                _ = self.worker_future.await(self.io) catch |shutdown_err| {
+                    std.debug.panic("async logger worker shutdown failed: {}", .{shutdown_err});
+                };
                 self.flushPending();
-                self.scratch.deinit(self.allocator);
                 self.output.deinit();
                 self.queue.deinit();
                 self.allocator.free(self.batch);
@@ -887,9 +835,8 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 allocator.destroy(self);
             }
 
-            fn enqueue(self: *AsyncLogger, bytes: []u8, level: config.Level) void {
-                if (!self.queue.push(self.io, .{ .bytes = bytes, .level = level })) {
-                    self.allocator.free(bytes);
+            fn enqueue(self: *AsyncLogger, entry: AsyncEntry) void {
+                if (!self.queue.push(self.io, entry)) {
                     _ = self.logs_dropped.fetchAdd(1, .monotonic);
                 }
             }
@@ -898,35 +845,24 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                 while (true) {
                     const count = self.queue.popBatch(self.io, self.batch);
                     if (count == 0) break;
-                    self.writeBatch(self.batch[0..count]);
+                    self.writeBatchTracked(self.batch[0..count]);
                 }
             }
 
             fn waitUntilDrained(self: *AsyncLogger) void {
-                self.queue.waitUntilEmpty(self.io);
+                while (true) {
+                    self.queue.waitUntilEmpty(self.io);
+                    self.waitUntilIdle();
+                    if (self.queue.size(self.io) == 0) break;
+                }
             }
 
             fn writeBatch(self: *AsyncLogger, entries: []AsyncEntry) void {
-                self.scratch.items.len = 0;
-
                 for (entries) |entry| {
-                    self.scratch.appendSlice(self.allocator, entry.bytes) catch {
-                        self.output.writeAll(entry.bytes) catch {};
-                        self.output.flush() catch {};
-                        self.allocator.free(entry.bytes);
-                        continue;
-                    };
+                    self.output.writeAll(entry.slice()) catch return;
                 }
 
-                if (self.scratch.items.len > 0) {
-                    self.output.writeAll(self.scratch.items) catch {};
-                    self.output.flush() catch {};
-                }
-
-                for (entries) |entry| {
-                    self.allocator.free(entry.bytes);
-                }
-
+                self.output.flush() catch return;
                 _ = self.logs_written.fetchAdd(entries.len, .monotonic);
                 _ = self.flush_count.fetchAdd(1, .monotonic);
             }
@@ -934,7 +870,35 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             fn workerMain(self: *AsyncLogger) std.Io.Cancelable!void {
                 while (true) {
                     const count = self.queue.popBatchBlocking(self.io, &self.should_stop, self.batch) orelse break;
-                    if (count != 0) self.writeBatch(self.batch[0..count]);
+                    if (count != 0) self.writeBatchTracked(self.batch[0..count]);
+                }
+            }
+
+            fn writeBatchTracked(self: *AsyncLogger, entries: []AsyncEntry) void {
+                self.beginWrite();
+                defer self.endWrite();
+                self.writeBatch(entries);
+            }
+
+            fn beginWrite(self: *AsyncLogger) void {
+                self.drain_mutex.lockUncancelable(self.io);
+                defer self.drain_mutex.unlock(self.io);
+                self.write_in_progress += 1;
+            }
+
+            fn endWrite(self: *AsyncLogger) void {
+                self.drain_mutex.lockUncancelable(self.io);
+                defer self.drain_mutex.unlock(self.io);
+                std.debug.assert(self.write_in_progress > 0);
+                self.write_in_progress -= 1;
+                if (self.write_in_progress == 0) self.drain_condition.broadcast(self.io);
+            }
+
+            fn waitUntilIdle(self: *AsyncLogger) void {
+                self.drain_mutex.lockUncancelable(self.io);
+                defer self.drain_mutex.unlock(self.io);
+                while (self.write_in_progress != 0) {
+                    self.drain_condition.waitUncancelable(self.io, &self.drain_mutex);
                 }
             }
 
@@ -948,7 +912,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
                     .logs_written = self.logs_written.load(.monotonic),
                     .logs_dropped = self.logs_dropped.load(.monotonic),
                     .flush_count = self.flush_count.load(.monotonic),
-                    .queue_size = @intCast(self.queue.size(self.io)),
+                    .queue_size = self.queue.size(self.io),
                 };
             }
         };

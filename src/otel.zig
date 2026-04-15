@@ -196,7 +196,7 @@ pub const LogRecord = struct {
         assert(resource.service_name.len > 0);
         assert(scope.name.len > 0);
 
-        const now_ns = @as(u64, @intCast(std.Io.Timestamp.now(runtimeIo(), .real).nanoseconds));
+        const now_ns: u64 = @intCast(std.Io.Timestamp.now(runtimeIo(), .real).nanoseconds);
         const severity = SeverityNumber.fromLevel(level);
 
         const result = LogRecord{
