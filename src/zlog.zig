@@ -25,6 +25,7 @@ pub const TaskContext = correlation.TaskContext;
 pub const Span = correlation.Span;
 pub const getCurrentTaskContext = correlation.getCurrentTaskContext;
 pub const setTaskContext = correlation.setTaskContext;
+pub const clearTaskContext = correlation.clearTaskContext;
 pub const createChildTaskContext = correlation.createChildTaskContext;
 
 pub const RedactionOptions = redaction.RedactionOptions;

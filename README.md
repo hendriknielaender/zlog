@@ -405,8 +405,8 @@ defer runtime.deinit();
 
 // `writer` is a `*std.Io.Writer`
 var logger = try zlog.Logger(.{ .async_mode = true }).initAsyncWithEventLoop(
-    writer, 
-    &runtime, 
+    writer,
+    &runtime,
     allocator
 );
 defer logger.deinit();

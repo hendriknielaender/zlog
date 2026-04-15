@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 const config = @import("config.zig");
 const field = @import("field.zig");
@@ -341,19 +342,29 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             return if (self.redaction_config) |cfg_ptr| cfg_ptr.shouldRedact(key) else false;
         }
 
+        fn traceContextForLog(self: *const Self) trace_mod.TraceContext {
+            _ = self;
+
+            if (correlation.getCurrentTaskContextIfSet()) |task_context| {
+                assert(!trace_mod.is_all_zero_id(task_context.trace_context.trace_id[0..]));
+                return task_context.trace_context;
+            }
+
+            const trace_context = trace_mod.TraceContext.init(false);
+            assert(!trace_mod.is_all_zero_id(trace_context.trace_id[0..]));
+            return trace_context;
+        }
+
         pub fn trace(self: *Self, message: []const u8, fields_struct: anytype) void {
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logInternal(.trace, message, default_trace_ctx, fields_struct);
+            self.logInternal(.trace, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn debug(self: *Self, message: []const u8, fields_struct: anytype) void {
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logInternal(.debug, message, default_trace_ctx, fields_struct);
+            self.logInternal(.debug, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn info(self: *Self, message: []const u8, fields_struct: anytype) void {
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logInternal(.info, message, default_trace_ctx, fields_struct);
+            self.logInternal(.info, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn infoWithTrace(
@@ -366,18 +377,15 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
         }
 
         pub fn warn(self: *Self, message: []const u8, fields_struct: anytype) void {
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logInternal(.warn, message, default_trace_ctx, fields_struct);
+            self.logInternal(.warn, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn err(self: *Self, message: []const u8, fields_struct: anytype) void {
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logInternal(.err, message, default_trace_ctx, fields_struct);
+            self.logInternal(.err, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn fatal(self: *Self, message: []const u8, fields_struct: anytype) void {
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logInternal(.fatal, message, default_trace_ctx, fields_struct);
+            self.logInternal(.fatal, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn logDynamic(
@@ -386,28 +394,76 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             message: []const u8,
             dynamic_fields: []const field.Field,
         ) void {
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logWithTrace(level, message, default_trace_ctx, dynamic_fields);
+            self.logWithTrace(level, message, self.traceContextForLog(), dynamic_fields);
         }
 
         pub fn spanStart(self: *Self, operation_name: []const u8, operation_fields_struct: anytype) correlation.Span {
-            const current_context = correlation.getCurrentTaskContext();
-            const span = correlation.Span.init(operation_name, current_context.currentSpan(), current_context.trace_context);
+            const current_context = correlation.ensureTaskContext();
+            assert(current_context.id >= 1);
+            assert(!trace_mod.is_all_zero_id(current_context.trace_context.trace_id[0..]));
+
+            var parent_span_bytes: [8]u8 = undefined;
+            if (current_context.currentSpan()) |active_span_bytes| {
+                parent_span_bytes = active_span_bytes;
+            } else {
+                parent_span_bytes = current_context.trace_context.parent_id;
+            }
+
+            const span = correlation.Span.init(
+                operation_name,
+                parent_span_bytes,
+                current_context.trace_context,
+            );
+
+            current_context.pushSpan(span.getSpanIdBytes()) catch unreachable;
+            current_context.trace_context = span.trace_context;
+
+            const active_span_bytes = current_context.currentSpan().?;
+            const span_id_bytes = span.getSpanIdBytes();
+            assert(std.mem.eql(u8, &active_span_bytes, &span_id_bytes));
 
             var fields_array = tryBuildSpanStartFields(span, operation_fields_struct);
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logWithTrace(.info, operation_name, default_trace_ctx, fields_array.constSlice());
+            self.logWithTrace(.info, operation_name, span.trace_context, fields_array.constSlice());
 
             return span;
         }
 
         pub fn spanEnd(self: *Self, completed_span: correlation.Span, completion_fields_struct: anytype) void {
-            const span_end_time_ns = monotonicNowNs();
-            const span_duration_ns = span_end_time_ns - completed_span.start_time;
+            const current_context = correlation.ensureTaskContext();
+            const active_span_bytes = current_context.currentSpan() orelse
+                @panic("spanEnd() requires an active span");
+            const completed_span_bytes = completed_span.getSpanIdBytes();
+            assert(std.mem.eql(u8, &active_span_bytes, &completed_span_bytes));
+
+            const finish_time_ns = monotonicNowNs();
+            const span_duration_ns = completed_span.durationNs(finish_time_ns);
+            assert(span_duration_ns > 0);
 
             var fields_array = tryBuildSpanEndFields(completed_span, span_duration_ns, completion_fields_struct);
-            const default_trace_ctx = trace_mod.TraceContext.init(false);
-            self.logWithTrace(.info, completed_span.name, default_trace_ctx, fields_array.constSlice());
+            self.logWithTrace(
+                .info,
+                completed_span.name,
+                completed_span.trace_context,
+                fields_array.constSlice(),
+            );
+
+            const popped_span_bytes = current_context.popSpan().?;
+            assert(std.mem.eql(u8, &popped_span_bytes, &completed_span_bytes));
+
+            const restored_span_bytes = if (current_context.currentSpan()) |parent_active_span_bytes|
+                parent_active_span_bytes
+            else if (completed_span.parent_span_bytes) |parent_span_bytes|
+                parent_span_bytes
+            else
+                current_context.trace_context.parent_id;
+            current_context.trace_context =
+                completed_span.trace_context.withParentId(restored_span_bytes);
+
+            assert(std.mem.eql(
+                u8,
+                &current_context.trace_context.parent_id,
+                &restored_span_bytes,
+            ));
         }
 
         const SpanStartFields = FieldBuffer(max_fields + 4);
@@ -988,4 +1044,87 @@ test "async logger flushes queued logs" {
     const output = sink.buffered();
     try testing.expect(std.mem.indexOf(u8, output, "\"msg\":\"async\"") != null);
     try testing.expect(std.mem.indexOf(u8, output, "\"kind\":\"basic\"") != null);
+}
+
+test "logger reuses the current task trace context" {
+    correlation.clearTaskContext();
+    defer correlation.clearTaskContext();
+
+    var sink_buffer: [2048]u8 = undefined;
+    var sink: std.Io.Writer = .fixed(&sink_buffer);
+
+    var logger = Logger(.{}).init(&sink);
+    defer logger.deinit();
+
+    var task_context = correlation.TaskContext.init(null);
+    correlation.setTaskContext(&task_context);
+
+    logger.info("correlated", .{});
+
+    const output = sink.buffered();
+    try testing.expect(std.mem.indexOf(u8, output, task_context.trace_context.trace_id_hex[0..]) != null);
+    try testing.expect(std.mem.indexOf(u8, output, task_context.trace_context.span_id_hex[0..]) != null);
+}
+
+test "span lifecycle keeps the task context synchronized" {
+    correlation.clearTaskContext();
+    defer correlation.clearTaskContext();
+
+    var sink_buffer: [4096]u8 = undefined;
+    var sink: std.Io.Writer = .fixed(&sink_buffer);
+
+    var logger = Logger(.{}).init(&sink);
+    defer logger.deinit();
+
+    var root_context = correlation.TaskContext.init(null);
+    correlation.setTaskContext(&root_context);
+
+    const request_span = logger.spanStart("request", .{ .route = "/checkout" });
+    logger.info("inside request", .{});
+
+    var current_context = correlation.getCurrentTaskContext();
+    const request_active_span = current_context.currentSpan().?;
+    const request_span_bytes = request_span.getSpanIdBytes();
+    try testing.expect(std.mem.eql(u8, &request_active_span, &request_span_bytes));
+    try testing.expect(std.mem.eql(
+        u8,
+        &current_context.trace_context.parent_id,
+        &request_span_bytes,
+    ));
+
+    const database_span = logger.spanStart("database", .{ .table = "orders" });
+    current_context = correlation.getCurrentTaskContext();
+    const database_active_span = current_context.currentSpan().?;
+    const database_span_bytes = database_span.getSpanIdBytes();
+    try testing.expect(std.mem.eql(u8, &database_active_span, &database_span_bytes));
+    try testing.expect(database_span.parent_id.? == request_span.id);
+
+    logger.spanEnd(database_span, .{ .rows = @as(u64, 1) });
+    current_context = correlation.getCurrentTaskContext();
+    const restored_request_span = current_context.currentSpan().?;
+    try testing.expect(std.mem.eql(u8, &restored_request_span, &request_span_bytes));
+
+    logger.spanEnd(request_span, .{ .status_code = @as(u64, 200) });
+    current_context = correlation.getCurrentTaskContext();
+    try testing.expect(current_context.currentSpan() == null);
+    const restored_parent_span_bytes = request_span.parent_span_bytes.?;
+    try testing.expect(std.mem.eql(
+        u8,
+        &current_context.trace_context.parent_id,
+        &restored_parent_span_bytes,
+    ));
+
+    const output = sink.buffered();
+    try testing.expect(std.mem.containsAtLeast(
+        u8,
+        output,
+        2,
+        request_span.trace_context.trace_id_hex[0..],
+    ));
+    try testing.expect(std.mem.containsAtLeast(
+        u8,
+        output,
+        2,
+        request_span.trace_context.span_id_hex[0..],
+    ));
 }

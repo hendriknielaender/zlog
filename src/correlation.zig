@@ -15,6 +15,7 @@ pub const Span = struct {
 
     id: u64,
     parent_id: ?u64,
+    parent_span_bytes: ?[8]u8,
     task_id: u64,
 
     pub fn init(span_name: []const u8, parent_span_bytes: ?[8]u8, trace_ctx: trace_mod.TraceContext) Span {
@@ -38,6 +39,7 @@ pub const Span = struct {
             .thread_id = @intCast(thread_id_current),
             .id = span_id_legacy,
             .parent_id = parent_id_legacy,
+            .parent_span_bytes = parent_span_bytes,
             .task_id = task_id_legacy,
         };
 
@@ -49,6 +51,15 @@ pub const Span = struct {
 
     pub fn getSpanIdBytes(self: *const Span) [8]u8 {
         return self.trace_context.parent_id;
+    }
+
+    pub fn durationNs(self: *const Span, finish_time_ns: i128) u64 {
+        assert(finish_time_ns >= self.start_time);
+        assert(self.start_time > 0);
+
+        const duration_ns = finish_time_ns - self.start_time;
+        assert(duration_ns >= 0);
+        return @intCast(duration_ns);
     }
 };
 
@@ -139,6 +150,23 @@ pub const TaskContext = struct {
 
         assert(!trace_mod.is_all_zero_id(context_result.trace_context.trace_id[0..]));
         return context_result;
+    }
+
+    pub fn createChild(self: *const TaskContext) TaskContext {
+        assert(!trace_mod.is_all_zero_id(self.trace_context.trace_id[0..]));
+        assert(self.id >= 1);
+
+        const child_trace_context =
+            self.createChildTraceContext(self.trace_context.trace_flags.sampled);
+        var child_context = TaskContext.fromTraceContext(child_trace_context);
+        child_context.id = generate_task_id();
+        child_context.parent_id = self.id;
+
+        assert(child_context.id >= 1);
+        assert(child_context.id != self.id);
+        assert(child_context.parent_id.? == self.id);
+        assert(std.mem.eql(u8, &child_context.trace_context.trace_id, &self.trace_context.trace_id));
+        return child_context;
     }
 
     pub fn pushSpan(self: *TaskContext, span_id_bytes: [8]u8) !void {
@@ -254,9 +282,7 @@ pub const CorrelationContext = packed struct {
 };
 
 var task_id_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
-var span_id_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
-
-threadlocal var current_task_context: ?*TaskContext = null;
+threadlocal var current_task_context: ?TaskContext = null;
 
 pub fn generate_task_id() u64 {
     const id_generated = task_id_counter.fetchAdd(1, .monotonic);
@@ -266,10 +292,10 @@ pub fn generate_task_id() u64 {
 }
 
 pub fn getCurrentTaskContext() TaskContext {
-    if (current_task_context) |context_ptr| {
-        assert(context_ptr.id >= 1);
-        assert(context_ptr.span_stack.capacity() == 32);
-        return context_ptr.*;
+    if (current_task_context) |context_value| {
+        assert(context_value.id >= 1);
+        assert(context_value.span_stack.capacity() == 32);
+        return context_value;
     }
     const default_context = TaskContext.init(null);
     assert(default_context.id >= 1);
@@ -281,13 +307,32 @@ pub fn setTaskContext(context_ptr: *TaskContext) void {
     assert(context_ptr.id >= 1);
     assert(context_ptr.span_stack.capacity() == 32);
     assert(@TypeOf(context_ptr.*) == TaskContext);
-    current_task_context = context_ptr;
+    current_task_context = context_ptr.*;
+}
+
+pub fn clearTaskContext() void {
+    current_task_context = null;
+}
+
+pub fn getCurrentTaskContextIfSet() ?TaskContext {
+    return current_task_context;
+}
+
+pub fn ensureTaskContext() *TaskContext {
+    if (current_task_context == null) {
+        current_task_context = TaskContext.init(null);
+    }
+
+    const context_ptr = &current_task_context.?;
+    assert(context_ptr.id >= 1);
+    assert(context_ptr.span_stack.capacity() == 32);
+    return context_ptr;
 }
 
 pub fn createChildTaskContext() TaskContext {
-    const parent_context = getCurrentTaskContext();
+    const parent_context = ensureTaskContext();
     assert(parent_context.id >= 1);
-    const child_context = TaskContext.init(parent_context.id);
+    const child_context = parent_context.createChild();
     assert(child_context.id >= 1);
     assert(child_context.parent_id.? == parent_context.id);
     return child_context;
@@ -304,6 +349,7 @@ test "Span.init creates valid span" {
     try testing.expect(span.thread_id > 0);
     try testing.expect(span.id > 0);
     try testing.expect(span.parent_id == null);
+    try testing.expect(span.parent_span_bytes == null);
     try testing.expect(span.task_id > 0);
 }
 
@@ -413,6 +459,9 @@ test "getCurrentTaskContext returns valid context" {
 }
 
 test "setTaskContext and getCurrentTaskContext" {
+    clearTaskContext();
+    defer clearTaskContext();
+
     var custom_context = TaskContext.init(null);
     const original_id = custom_context.id;
 
@@ -423,6 +472,9 @@ test "setTaskContext and getCurrentTaskContext" {
 }
 
 test "createChildTaskContext creates child with parent reference" {
+    clearTaskContext();
+    defer clearTaskContext();
+
     var parent_context = TaskContext.init(null);
     setTaskContext(&parent_context);
 
@@ -431,4 +483,20 @@ test "createChildTaskContext creates child with parent reference" {
     try testing.expect(child_context.id >= 1);
     try testing.expect(child_context.parent_id.? == parent_context.id);
     try testing.expect(child_context.id != parent_context.id);
+    try testing.expect(std.mem.eql(
+        u8,
+        &child_context.trace_context.trace_id,
+        &parent_context.trace_context.trace_id,
+    ));
+}
+
+test "clearTaskContext removes the current thread-local context" {
+    var context = TaskContext.init(null);
+    setTaskContext(&context);
+
+    try testing.expect(getCurrentTaskContextIfSet() != null);
+
+    clearTaskContext();
+
+    try testing.expect(getCurrentTaskContextIfSet() == null);
 }

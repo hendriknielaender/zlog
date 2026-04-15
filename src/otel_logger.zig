@@ -5,6 +5,7 @@ const field = @import("field.zig");
 const field_input = @import("field_input.zig");
 const trace_mod = @import("trace.zig");
 const otel = @import("otel.zig");
+const correlation = @import("correlation.zig");
 const escape = @import("string_escape.zig");
 const redaction = @import("redaction.zig");
 const EventLoop = @import("event_loop.zig").EventLoop;
@@ -314,16 +315,27 @@ pub fn OTelLoggerWithRedaction(
             return if (self.redaction_config) |cfg_ptr| cfg_ptr.shouldRedact(key) else false;
         }
 
+        fn traceContextForLog(self: *const Self) ?trace_mod.TraceContext {
+            _ = self;
+
+            if (correlation.getCurrentTaskContextIfSet()) |task_context| {
+                std.debug.assert(!trace_mod.is_all_zero_id(task_context.trace_context.trace_id[0..]));
+                return task_context.trace_context;
+            }
+
+            return null;
+        }
+
         pub fn trace(self: *Self, message: []const u8, fields_struct: anytype) void {
-            self.logInternal(.trace, message, null, fields_struct);
+            self.logInternal(.trace, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn debug(self: *Self, message: []const u8, fields_struct: anytype) void {
-            self.logInternal(.debug, message, null, fields_struct);
+            self.logInternal(.debug, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn info(self: *Self, message: []const u8, fields_struct: anytype) void {
-            self.logInternal(.info, message, null, fields_struct);
+            self.logInternal(.info, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn infoWithTrace(
@@ -336,15 +348,15 @@ pub fn OTelLoggerWithRedaction(
         }
 
         pub fn warn(self: *Self, message: []const u8, fields_struct: anytype) void {
-            self.logInternal(.warn, message, null, fields_struct);
+            self.logInternal(.warn, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn err(self: *Self, message: []const u8, fields_struct: anytype) void {
-            self.logInternal(.err, message, null, fields_struct);
+            self.logInternal(.err, message, self.traceContextForLog(), fields_struct);
         }
 
         pub fn fatal(self: *Self, message: []const u8, fields_struct: anytype) void {
-            self.logInternal(.fatal, message, null, fields_struct);
+            self.logInternal(.fatal, message, self.traceContextForLog(), fields_struct);
         }
 
         fn logInternal(
@@ -442,6 +454,12 @@ pub fn OTelLoggerWithRedaction(
             self.output.flush() catch return;
         }
 
+        fn writeJsonString(writer: *std.Io.Writer, value: []const u8) !void {
+            try writer.writeByte('"');
+            try escape.write(cfg, writer, value);
+            try writer.writeByte('"');
+        }
+
         fn writeRecord(self: *Self, writer: *std.Io.Writer, log_record: otel.LogRecord) !void {
             if (otel_config.enable_otel_format) {
                 try self.formatOTelJson(writer, log_record);
@@ -457,15 +475,21 @@ pub fn OTelLoggerWithRedaction(
             try writer.print("\"observedTimeUnixNano\":\"{}\",", .{log_record.observed_timestamp});
             try writer.print("\"severityNumber\":{},", .{@intFromEnum(log_record.severity_number)});
             if (log_record.severity_text) |severity_text| {
-                try writer.print("\"severityText\":\"{s}\",", .{severity_text});
+                try writer.writeAll("\"severityText\":");
+                try writeJsonString(writer, severity_text);
+                try writer.writeAll(",");
             }
             try writer.writeAll("\"body\":{\"stringValue\":\"");
             if (log_record.body.asString()) |body_str| try escape.write(cfg, writer, body_str);
             try writer.writeAll("\"},");
 
             try writer.writeAll("\"attributes\":[");
-            for (log_record.attributes, 0..) |attr, i| {
-                if (i > 0) try writer.writeAll(",");
+            var first_attribute = true;
+            for (log_record.attributes) |attr| {
+                if (attr.value == .null) continue;
+
+                if (!first_attribute) try writer.writeAll(",");
+                first_attribute = false;
                 try self.writeOtelAttribute(writer, attr);
             }
             try writer.writeAll("],");
@@ -489,10 +513,11 @@ pub fn OTelLoggerWithRedaction(
             try writer.writeAll("]},");
 
             try writer.writeAll("\"scope\":{\"name\":\"");
-            try writer.writeAll(log_record.instrumentation_scope.name);
+            try escape.write(cfg, writer, log_record.instrumentation_scope.name);
             try writer.writeAll("\"");
             if (log_record.instrumentation_scope.version) |version| {
-                try writer.print(",\"version\":\"{s}\"", .{version});
+                try writer.writeAll(",\"version\":");
+                try writeJsonString(writer, version);
             }
             try writer.writeAll("}}");
         }
@@ -522,9 +547,11 @@ pub fn OTelLoggerWithRedaction(
                 try writer.print(",\"span\":\"{s}\"", .{span_hex});
             }
 
-            try writer.print(",\"service.name\":\"{s}\"", .{log_record.resource.service_name});
+            try writer.writeAll(",\"service.name\":");
+            try writeJsonString(writer, log_record.resource.service_name);
             if (log_record.resource.service_version) |version| {
-                try writer.print(",\"service.version\":\"{s}\"", .{version});
+                try writer.writeAll(",\"service.version\":");
+                try writeJsonString(writer, version);
             }
 
             for (log_record.attributes) |attr| {
@@ -559,6 +586,8 @@ pub fn OTelLoggerWithRedaction(
         }
 
         fn writeOtelAttribute(self: *Self, writer: *std.Io.Writer, attr: field.Field) !void {
+            std.debug.assert(attr.value != .null);
+
             try writer.writeAll("{\"key\":\"");
             try escape.write(cfg, writer, attr.key);
             try writer.writeAll("\",\"value\":");
@@ -576,7 +605,7 @@ pub fn OTelLoggerWithRedaction(
                     .uint => |u| try writer.print("{{\"intValue\":\"{}\"}}", .{u}),
                     .float => |f| try writer.print("{{\"doubleValue\":{d:.5}}}", .{f}),
                     .boolean => |b| try writer.print("{{\"boolValue\":{}}}", .{b}),
-                    .null => try writer.writeAll("{\"stringValue\":null}"),
+                    .null => unreachable,
                     .redacted => try writer.writeAll("{\"stringValue\":\"[REDACTED]\"}"),
                 }
             }
@@ -587,13 +616,13 @@ pub fn OTelLoggerWithRedaction(
         fn writeResourceAttributes(self: *Self, writer: *std.Io.Writer, resource: otel.Resource) !void {
             _ = self;
             try writer.writeAll("{\"key\":\"service.name\",\"value\":{\"stringValue\":\"");
-            try writer.writeAll(resource.service_name);
+            try escape.write(cfg, writer, resource.service_name);
             try writer.writeAll("\"}}");
 
             if (resource.service_version) |version| {
                 try writer.writeAll(",");
                 try writer.writeAll("{\"key\":\"service.version\",\"value\":{\"stringValue\":\"");
-                try writer.writeAll(version);
+                try escape.write(cfg, writer, version);
                 try writer.writeAll("\"}}");
             }
         }
@@ -864,4 +893,57 @@ test "otel async logger flushes output" {
     const output = sink.buffered();
     try testing.expect(std.mem.indexOf(u8, output, "async message") != null);
     try testing.expect(std.mem.indexOf(u8, output, "async-service") != null);
+}
+
+test "otel logger reuses the current task trace context" {
+    correlation.clearTaskContext();
+    defer correlation.clearTaskContext();
+
+    var sink_buffer: [4096]u8 = undefined;
+    var sink: std.Io.Writer = .fixed(&sink_buffer);
+
+    const otel_config = comptime otel.OTelConfig{
+        .resource = otel.Resource.init().withService("trace-service", "1.0.0"),
+        .instrumentation_scope = otel.InstrumentationScope.init("trace-scope"),
+    };
+
+    var logger = OTelLogger(otel_config).init(&sink);
+    defer logger.deinit();
+
+    var task_context = correlation.TaskContext.init(null);
+    correlation.setTaskContext(&task_context);
+
+    logger.info("correlated", .{ .key = "value" });
+
+    const output = sink.buffered();
+    try testing.expect(std.mem.indexOf(u8, output, task_context.trace_context.trace_id_hex[0..]) != null);
+    try testing.expect(std.mem.indexOf(u8, output, task_context.trace_context.span_id_hex[0..]) != null);
+}
+
+test "otel json escapes metadata and omits null attributes" {
+    var sink_buffer: [4096]u8 = undefined;
+    var sink: std.Io.Writer = .fixed(&sink_buffer);
+
+    const otel_config = comptime otel.OTelConfig{
+        .resource = otel.Resource.init().withService("service\"name", "v1\\test"),
+        .instrumentation_scope = otel.InstrumentationScope.init("scope\nname")
+            .withVersion("scope\"version"),
+        .enable_otel_format = true,
+    };
+
+    var logger = OTelLogger(otel_config).init(&sink);
+    defer logger.deinit();
+
+    logger.info("metadata", .{
+        .present = "value",
+        .missing = null,
+    });
+
+    const output = sink.buffered();
+    try testing.expect(std.mem.indexOf(u8, output, "service\\\"name") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "v1\\\\test") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "scope\\nname") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "scope\\\"version") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "\"missing\"") == null);
+    try testing.expect(std.mem.indexOf(u8, output, "\"stringValue\":null") == null);
 }
