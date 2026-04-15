@@ -747,7 +747,8 @@ pub fn OTelLoggerWithRedaction(
             fn destroy(self: *AsyncLogger) void {
                 self.should_stop.store(true, .release);
                 self.queue.wakeAll(self.io);
-                _ = self.worker_future.await(self.io) catch |shutdown_err| {
+                const await_future = @field(@TypeOf(self.worker_future), "await");
+                _ = await_future(&self.worker_future, self.io) catch |shutdown_err| {
                     std.debug.panic("otel logger worker shutdown failed: {}", .{shutdown_err});
                 };
                 self.flushPending();
