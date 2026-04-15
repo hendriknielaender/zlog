@@ -1,191 +1,103 @@
 const std = @import("std");
-const zbench = @import("zbench");
 const zlog = @import("zlog");
-const NullWriter = @import("writers.zig").NullWriter;
+const support = @import("support.zig");
 
-// Global allocator for benchmarks
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
-fn benchmarkVerboseOtelApi(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var null_writer = NullWriter{};
-
-    const otel_config = comptime zlog.OTelConfig{
-        .base_config = .{ .async_mode = false },
-        .resource = zlog.Resource.init().withService("benchmark-service", "1.0.0"),
-        .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
-    };
-
-    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
-    defer logger.deinit();
-
-    logger.info("User authentication successful", &.{
-        zlog.SemConv.userId("user123"),
-        zlog.SemConv.userName("alice"),
-        zlog.SemConv.sessionId("sess_abc123"),
-        zlog.Field.string("request_id", "req_456789"),
-        zlog.Field.int("attempt", 1),
-        zlog.Field.boolean("success", true),
-    });
-}
-
-fn benchmarkUnifiedOtelApi(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var null_writer = NullWriter{};
-
-    const otel_config = comptime zlog.OTelConfig{
-        .base_config = .{ .async_mode = false },
-        .resource = zlog.Resource.init().withService("benchmark-service", "1.0.0"),
-        .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
-    };
-
-    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
-    defer logger.deinit();
-
-    logger.info("User authentication successful", .{
-        .user_id = "user123",
-        .username = "alice",
-        .session_id = "sess_abc123",
-        .request_id = "req_456789",
-        .attempt = @as(i64, 1),
-        .success = true,
-    });
-}
-fn benchmarkVerboseOtelWithTrace(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var null_writer = NullWriter{};
-
-    const otel_config = comptime zlog.OTelConfig{
-        .base_config = .{ .async_mode = false },
-        .resource = zlog.Resource.init().withService("benchmark-service", "1.0.0"),
-        .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
-    };
-
-    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
-    defer logger.deinit();
-
-    const trace_ctx = zlog.TraceContext.init(true);
-    logger.infoWithTrace("HTTP request completed", trace_ctx, &.{
-        zlog.SemConv.httpMethod("POST"),
-        zlog.SemConv.httpUrl("/api/orders"),
-        zlog.SemConv.httpStatusCode(201),
-        zlog.SemConv.userId("customer123"),
-        zlog.Field.string("request_id", "req_456789"),
-        zlog.Field.int("duration_ms", 45),
-    });
-}
-
-fn benchmarkUnifiedOtelWithTrace(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var null_writer = NullWriter{};
-
-    const otel_config = comptime zlog.OTelConfig{
-        .base_config = .{ .async_mode = false },
-        .resource = zlog.Resource.init().withService("benchmark-service", "1.0.0"),
-        .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
-    };
-
-    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
-    defer logger.deinit();
-
-    const trace_ctx = zlog.TraceContext.init(true);
-    logger.infoWithTrace("HTTP request completed", trace_ctx, .{
-        .http_method = "POST",
-        .http_url = "/api/orders",
-        .http_status_code = 201,
-        .user_id = "customer123",
-        .request_id = "req_456789",
-        .duration_ms = @as(i64, 45),
-    });
-}
-
-fn benchmarkVerboseMixedTypes(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var null_writer = NullWriter{};
-
-    const otel_config = comptime zlog.OTelConfig{
-        .base_config = .{ .async_mode = false },
-        .resource = zlog.Resource.init().withService("benchmark-service", "1.0.0"),
-        .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
-    };
-
-    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
-    defer logger.deinit();
-
-    logger.info("Mixed field types", &.{
-        zlog.Field.string("string_field", "test_value"),
-        zlog.Field.int("int_field", 42),
-        zlog.Field.uint("uint_field", 84),
-        zlog.Field.float("float_field", 3.14159),
-        zlog.Field.boolean("bool_field", true),
-        zlog.Field.null_value("null_field"),
-    });
-}
-
-fn benchmarkUnifiedMixedTypes(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var null_writer = NullWriter{};
-
-    const otel_config = comptime zlog.OTelConfig{
-        .base_config = .{ .async_mode = false },
-        .resource = zlog.Resource.init().withService("benchmark-service", "1.0.0"),
-        .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
-    };
-
-    var logger = zlog.OTelLogger(otel_config).init(&null_writer);
-    defer logger.deinit();
-
-    logger.info("Mixed field types", .{
-        .string_field = "test_value",
-        .int_field = @as(i64, 42),
-        .uint_field = @as(u64, 84),
-        .float_field = 3.14159,
-        .bool_field = true,
-        .null_field = null,
-    });
-}
+const otel_config = zlog.OTelConfig{
+    .base_config = .{ .async_mode = false },
+    .resource = zlog.Resource.init().withService("benchmark-service", "1.0.0"),
+    .instrumentation_scope = zlog.InstrumentationScope.init("benchmark-logger"),
+};
 
 pub fn main() !void {
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    var sink_buffer: [512]u8 = undefined;
+    var sink = std.Io.Writer.Discarding.init(&sink_buffer);
+    var logger = zlog.OTelLogger(otel_config).init(&sink.writer);
+    defer logger.deinit();
 
-    std.debug.print("=== Unified OTEL API Performance Benchmark ===\n\n", .{});
+    const trace_ctx = zlog.TraceContext.init(true);
+    const iterations = 80_000;
+
+    std.debug.print("=== OTel API Ergonomics Benchmark ===\n\n", .{});
+
+    printCase("field array", iterations, benchmarkFieldArray(&logger, iterations));
+    printCase("anonymous struct", iterations, benchmarkStructSyntax(&logger, iterations));
+    printCase("array + trace", iterations, benchmarkFieldArrayTrace(&logger, trace_ctx, iterations));
+    printCase("struct + trace", iterations, benchmarkStructTrace(&logger, trace_ctx, iterations));
+
+    std.debug.print("\nBytes written to sink: {d}\n", .{sink.fullCount()});
+}
+
+fn benchmarkFieldArray(logger: *zlog.OTelLogger(otel_config), iterations: usize) i128 {
+    const start = support.nowNs();
+    for (0..iterations) |i| {
+        logger.info("user authentication successful", &.{
+            zlog.SemConv.userId("user123"),
+            zlog.SemConv.userName("alice"),
+            zlog.SemConv.sessionId("sess_abc123"),
+            zlog.Field.string("request_id", "req_456789"),
+            zlog.Field.int("attempt", @as(i64, @intCast(i % 5))),
+            zlog.Field.boolean("success", true),
+        });
+    }
+    return support.nowNs() - start;
+}
+
+fn benchmarkStructSyntax(logger: *zlog.OTelLogger(otel_config), iterations: usize) i128 {
+    const start = support.nowNs();
+    for (0..iterations) |i| {
+        logger.info("user authentication successful", .{
+            .user_id = "user123",
+            .username = "alice",
+            .session_id = "sess_abc123",
+            .request_id = "req_456789",
+            .attempt = @as(i64, @intCast(i % 5)),
+            .success = true,
+        });
+    }
+    return support.nowNs() - start;
+}
+
+fn benchmarkFieldArrayTrace(
+    logger: *zlog.OTelLogger(otel_config),
+    trace_ctx: zlog.TraceContext,
+    iterations: usize,
+) i128 {
+    const start = support.nowNs();
+    for (0..iterations) |_| {
+        logger.infoWithTrace("HTTP request completed", trace_ctx, &.{
+            zlog.SemConv.httpMethod("POST"),
+            zlog.SemConv.httpUrl("/api/orders"),
+            zlog.SemConv.httpStatusCode(201),
+            zlog.SemConv.userId("customer123"),
+            zlog.Field.string("request_id", "req_456789"),
+            zlog.Field.int("duration_ms", 45),
+        });
+    }
+    return support.nowNs() - start;
+}
+
+fn benchmarkStructTrace(
+    logger: *zlog.OTelLogger(otel_config),
+    trace_ctx: zlog.TraceContext,
+    iterations: usize,
+) i128 {
+    const start = support.nowNs();
+    for (0..iterations) |_| {
+        logger.infoWithTrace("HTTP request completed", trace_ctx, .{
+            .http_method = "POST",
+            .http_url = "/api/orders",
+            .http_status_code = @as(i64, 201),
+            .user_id = "customer123",
+            .request_id = "req_456789",
+            .duration_ms = @as(i64, 45),
+        });
+    }
+    return support.nowNs() - start;
+}
+
+fn printCase(name: []const u8, iterations: usize, duration_ns: i128) void {
     std.debug.print(
-        "Comparing field array vs anonymous struct syntax (sync mode for " ++
-            "benchmarking).\n\n",
-        .{},
-    );
-
-    var bench = zbench.Benchmark.init(allocator, .{});
-    defer bench.deinit();
-
-    try bench.add("verbose_otel_api", benchmarkVerboseOtelApi, .{});
-    try bench.add("unified_otel_api", benchmarkUnifiedOtelApi, .{});
-    try bench.add("verbose_otel_with_trace", benchmarkVerboseOtelWithTrace, .{});
-    try bench.add("unified_otel_with_trace", benchmarkUnifiedOtelWithTrace, .{});
-    try bench.add("verbose_mixed_types", benchmarkVerboseMixedTypes, .{});
-    try bench.add("unified_mixed_types", benchmarkUnifiedMixedTypes, .{});
-
-    // Simple benchmark output instead of zbench
-    std.debug.print("Running OTEL API benchmarks...\n", .{});
-    std.debug.print("• verbose_otel_api: Running...\n", .{});
-    benchmarkVerboseOtelApi(allocator);
-    std.debug.print("• unified_otel_api: Running...\n", .{});
-    benchmarkUnifiedOtelApi(allocator);
-    std.debug.print("• verbose_otel_with_trace: Running...\n", .{});
-    benchmarkVerboseOtelWithTrace(allocator);
-    std.debug.print("All OTEL benchmarks completed successfully.\n", .{});
-
-    std.debug.print("\n=== Analysis ===\n", .{});
-    std.debug.print("• verbose_otel_api: Traditional field array syntax\n", .{});
-    std.debug.print("• unified_otel_api: Unified API with anonymous struct syntax\n", .{});
-    std.debug.print("• verbose_otel_with_trace: Field arrays with trace context\n", .{});
-    std.debug.print("• unified_otel_with_trace: Unified API with trace context\n", .{});
-    std.debug.print("• verbose_mixed_types: Field arrays with various types\n", .{});
-    std.debug.print("• unified_mixed_types: Unified API with various types\n", .{});
-    std.debug.print(
-        "\nThe unified API should show similar or better performance due to " ++
-            "compile-time optimization.\n",
-        .{},
+        "{s:>16}: {d:>8.2} ms  ({d:>10.0} msg/s)\n",
+        .{ name, support.nsToMs(duration_ns), support.perSecond(iterations, duration_ns) },
     );
 }

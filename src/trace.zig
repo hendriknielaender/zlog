@@ -1,6 +1,10 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+fn runtimeIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 const hex_chars_lower = "0123456789abcdef";
 
 pub const TraceError = error{
@@ -144,7 +148,7 @@ pub const TraceContext = struct {
 
 pub fn generate_trace_id() [16]u8 {
     var trace_id_bytes: [16]u8 = undefined;
-    std.crypto.random.bytes(&trace_id_bytes);
+    runtimeIo().random(&trace_id_bytes);
 
     if (is_all_zero_id(trace_id_bytes[0..])) {
         trace_id_bytes[15] = 0x01;
@@ -157,7 +161,7 @@ pub fn generate_trace_id() [16]u8 {
 
 pub fn generate_span_id() [8]u8 {
     var span_id_bytes: [8]u8 = undefined;
-    std.crypto.random.bytes(&span_id_bytes);
+    runtimeIo().random(&span_id_bytes);
 
     if (is_all_zero_id(span_id_bytes[0..])) {
         span_id_bytes[7] = 0x01;

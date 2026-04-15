@@ -1,36 +1,29 @@
 const std = @import("std");
 const zlog = @import("zlog");
 
-pub fn main() !void {
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+pub fn main(init: std.process.Init) !void {
+    const gpa = init.gpa;
+    const io = init.io;
 
     const otel_config = comptime zlog.OTelConfig{
         .base_config = .{
-            .async_mode = false,
-            .level = .debug,
+            .async_mode = true,
         },
-        .enable_otel_format = true,
-        .resource = zlog.Resource.init().withService("checkout-api", "0.3.0"),
-        .instrumentation_scope = zlog.InstrumentationScope.init("zlog-example")
-            .withVersion("0.3.0"),
+        .resource = zlog.Resource.init().withService("zlog-example", "0.16.0"),
+        .instrumentation_scope = zlog.InstrumentationScope.init("otel-example"),
     };
 
-    var logger = zlog.OTelLogger(otel_config).init(&stdout_writer);
+    var logger = try zlog.OTelLogger(otel_config).initAsyncOwnedStderr(gpa, io);
     defer logger.deinit();
-    defer stdout_writer.interface.flush() catch {};
 
     const trace_ctx = zlog.TraceContext.init(true);
-
-    logger.infoWithTrace("checkout accepted", trace_ctx, .{
-        .@"http.method" = "POST",
-        .@"http.route" = "/v1/checkout",
-        .@"http.status_code" = 202,
-        .order_id = "ord_12345",
-        .tenant = "eu-central",
-        .duration_ms = 18.4,
-        .cache_hit = false,
+    logger.infoWithTrace("example request complete", trace_ctx, .{
+        .http_method = "GET",
+        .http_route = "/hello",
+        .http_status_code = 200,
+        .user_id = "demo-user",
+        .duration_ms = @as(u64, 12),
     });
 
-    try logger.flush();
+    try logger.runEventLoopUntilDone();
 }
