@@ -109,8 +109,8 @@ fn countStructFields(comptime T: type) comptime_int {
     assert(struct_info == .@"struct");
 
     var field_count: comptime_int = 0;
-    inline for (struct_info.@"struct".fields) |struct_field| {
-        field_count += countValueFields(struct_field.type);
+    inline for (struct_info.@"struct".field_types) |field_type| {
+        field_count += countValueFields(field_type);
     }
 
     return field_count;
@@ -165,9 +165,9 @@ fn appendStructFields(
     const struct_info = @typeInfo(@TypeOf(fields_struct));
     assert(struct_info == .@"struct");
 
-    inline for (struct_info.@"struct".fields) |struct_field| {
-        const field_value = @field(fields_struct, struct_field.name);
-        appendValueField(key_prefix, struct_field.name, field_value, target, field_index);
+    inline for (struct_info.@"struct".field_names) |field_name| {
+        const field_value = @field(fields_struct, field_name);
+        appendValueField(key_prefix, field_name, field_value, target, field_index);
     }
 }
 

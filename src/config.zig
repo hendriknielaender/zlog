@@ -9,7 +9,7 @@ pub const Level = enum(u8) {
     fatal = 5,
 
     pub fn string(self: Level) []const u8 {
-        std.debug.assert(@intFromEnum(self) <= @intFromEnum(Level.fatal));
+        std.debug.assert(@backingInt(self) <= @backingInt(Level.fatal));
 
         const level_string = switch (self) {
             .trace => "TRACE",
@@ -26,7 +26,7 @@ pub const Level = enum(u8) {
     }
 
     pub fn json_string(self: Level) []const u8 {
-        std.debug.assert(@intFromEnum(self) <= @intFromEnum(Level.fatal));
+        std.debug.assert(@backingInt(self) <= @backingInt(Level.fatal));
 
         const json_level_string = switch (self) {
             .trace => "Trace",
@@ -75,11 +75,11 @@ test "Level.json_string returns correct JSON strings" {
 }
 
 test "Level enum ordering" {
-    try testing.expect(@intFromEnum(Level.trace) < @intFromEnum(Level.debug));
-    try testing.expect(@intFromEnum(Level.debug) < @intFromEnum(Level.info));
-    try testing.expect(@intFromEnum(Level.info) < @intFromEnum(Level.warn));
-    try testing.expect(@intFromEnum(Level.warn) < @intFromEnum(Level.err));
-    try testing.expect(@intFromEnum(Level.err) < @intFromEnum(Level.fatal));
+    try testing.expect(@backingInt(Level.trace) < @backingInt(Level.debug));
+    try testing.expect(@backingInt(Level.debug) < @backingInt(Level.info));
+    try testing.expect(@backingInt(Level.info) < @backingInt(Level.warn));
+    try testing.expect(@backingInt(Level.warn) < @backingInt(Level.err));
+    try testing.expect(@backingInt(Level.err) < @backingInt(Level.fatal));
 }
 
 test "Config default values" {

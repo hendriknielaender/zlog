@@ -236,7 +236,7 @@ pub const CorrelationContext = packed struct {
 
     pub fn fromTraceContext(trace_ctx: trace_mod.TraceContext, span_bytes_optional: ?[8]u8, level_value: config.Level) CorrelationContext {
         assert(!trace_mod.is_all_zero_id(trace_ctx.trace_id[0..]));
-        assert(@intFromEnum(level_value) <= @intFromEnum(config.Level.fatal));
+        assert(@backingInt(level_value) <= @backingInt(config.Level.fatal));
 
         const task_id_legacy = trace_mod.extract_short_from_trace_id(trace_ctx.trace_id);
         const task_id_truncated: u32 = @truncate(task_id_legacy);
@@ -261,7 +261,7 @@ pub const CorrelationContext = packed struct {
 
     pub fn fromIds(task_id_u64: u64, span_id_optional: ?u64, level_value: config.Level) CorrelationContext {
         assert(task_id_u64 >= 1);
-        assert(@intFromEnum(level_value) <= @intFromEnum(config.Level.fatal));
+        assert(@backingInt(level_value) <= @backingInt(config.Level.fatal));
 
         const task_id_truncated: u32 = @truncate(task_id_u64);
         const span_id_value = span_id_optional orelse 0;

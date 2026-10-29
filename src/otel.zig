@@ -189,7 +189,7 @@ pub const LogRecord = struct {
         resource: Resource,
         scope: InstrumentationScope,
     ) LogRecord {
-        assert(@intFromEnum(level) <= @intFromEnum(config.Level.fatal));
+        assert(@backingInt(level) <= @backingInt(config.Level.fatal));
         assert(message.len > 0);
         assert(message.len < 65536);
         assert(attributes.len <= 1024);
@@ -215,7 +215,7 @@ pub const LogRecord = struct {
 
         assert(result.timestamp > 0);
         assert(result.observed_timestamp > 0);
-        assert(@intFromEnum(result.severity_number) <= 24);
+        assert(@backingInt(result.severity_number) <= 24);
         assert(result.body.asString().?.len > 0);
         return result;
     }
