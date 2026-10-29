@@ -178,7 +178,7 @@ test "Field key length constraints" {
     const valid_field = Field.string("a", "value");
     try testing.expect(valid_field.key.len == 1);
 
-    const long_key = "a" ** 255;
-    const long_key_field = Field.string(long_key, "value");
+    const long_key: [255]u8 = @splat('a');
+    const long_key_field = Field.string(&long_key, "value");
     try testing.expect(long_key_field.key.len == 255);
 }

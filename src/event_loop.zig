@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// EventLoop is a thin compatibility wrapper over Zig 0.16's native `std.Io`
+/// EventLoop is a thin compatibility wrapper over Zig 0.17's native `std.Io`
 /// runtime. Under the hood we use the fully-supported `Io.Threaded`
 /// implementation, which schedules work immediately and does not require
 /// manual polling.

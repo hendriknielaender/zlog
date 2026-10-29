@@ -46,7 +46,7 @@ pub fn main() !void {
     var filter_ns: u64 = 0;
     for (0..iterations) |_| {
         const start = support.nowNs();
-        const should_log = @intFromEnum(zlog.Level.debug) >= @intFromEnum(zlog.Level.info);
+        const should_log = @backingInt(zlog.Level.debug) >= @backingInt(zlog.Level.info);
         std.mem.doNotOptimizeAway(should_log);
         filter_ns += @as(u64, @intCast(support.nowNs() - start));
     }

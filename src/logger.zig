@@ -580,7 +580,7 @@ pub fn LoggerWithRedaction(comptime cfg: config.Config, comptime redaction_optio
             fields: []const field.Field,
         ) void {
             if (!cfg.enable_logging) return;
-            if (@intFromEnum(level) < @intFromEnum(self.level)) return;
+            if (@backingInt(level) < @backingInt(self.level)) return;
 
             if (async_mode) {
                 if (self.async_logger) |async_logger| {

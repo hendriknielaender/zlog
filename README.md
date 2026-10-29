@@ -30,7 +30,7 @@ zlog is a high-performance, zero-allocation structured logging library for Zig w
 }
 ```
 
-> **Note**: zlog now uses Zig 0.16's native `std.Io` runtime. No external event-loop dependency is required.
+> **Note**: zlog now uses Zig 0.17's native `std.Io` runtime. No external event-loop dependency is required.
 
 2. Configure in `build.zig`:
 
@@ -122,7 +122,7 @@ const Config = zlog.Config{
     .enable_simd = true,       // Enable SIMD optimizations
 };
 
-// Async logger using Zig 0.16's native std.Io runtime
+// Async logger using Zig 0.17's native std.Io runtime
 var logger = try zlog.Logger(Config).initAsyncOwnedStderr(allocator, io);
 defer logger.deinit();
 

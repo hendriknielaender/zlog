@@ -367,7 +367,7 @@ pub fn OTelLoggerWithRedaction(
             fields_input: anytype,
         ) void {
             if (!cfg.enable_logging) return;
-            if (@intFromEnum(level) < @intFromEnum(self.level)) return;
+            if (@backingInt(level) < @backingInt(self.level)) return;
 
             const InputType = @TypeOf(fields_input);
 
@@ -473,7 +473,7 @@ pub fn OTelLoggerWithRedaction(
             try writer.writeAll("{");
             try writer.print("\"timeUnixNano\":\"{}\",", .{log_record.timestamp});
             try writer.print("\"observedTimeUnixNano\":\"{}\",", .{log_record.observed_timestamp});
-            try writer.print("\"severityNumber\":{},", .{@intFromEnum(log_record.severity_number)});
+            try writer.print("\"severityNumber\":{},", .{@backingInt(log_record.severity_number)});
             if (log_record.severity_text) |severity_text| {
                 try writer.writeAll("\"severityText\":");
                 try writeJsonString(writer, severity_text);
@@ -532,7 +532,7 @@ pub fn OTelLoggerWithRedaction(
                 .{
                     log_record.timestamp / 1_000_000,
                     std.Thread.getCurrentId(),
-                    @intFromEnum(log_record.severity_number),
+                    @backingInt(log_record.severity_number),
                 },
             );
 

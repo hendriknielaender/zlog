@@ -352,7 +352,7 @@ pub const OTLPExporter = struct {
         try writer.writeAll("{");
         try writer.print("\"timeUnixNano\":\"{}\",", .{log_record.timestamp});
         try writer.print("\"observedTimeUnixNano\":\"{}\",", .{log_record.observed_timestamp});
-        try writer.print("\"severityNumber\":{},", .{@intFromEnum(log_record.severity_number)});
+        try writer.print("\"severityNumber\":{},", .{@backingInt(log_record.severity_number)});
 
         if (log_record.severity_text) |severity_text| {
             try writer.writeAll("\"severityText\":");

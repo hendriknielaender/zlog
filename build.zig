@@ -75,7 +75,7 @@ fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget) void {
     };
 
     // Create module for benchmarks to import
-    const zlog_benchmark_module = b.addModule("zlog", .{
+    const zlog_benchmark_module = b.createModule(.{
         .root_source_file = b.path("src/zlog.zig"),
         .target = target,
         .optimize = .ReleaseFast,
@@ -106,7 +106,7 @@ fn setupExamples(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const examples_step = b.step("examples", "Run all examples");
 
     // Create module for examples to import
-    const zlog_example_module = b.addModule("zlog", .{
+    const zlog_example_module = b.createModule(.{
         .root_source_file = b.path("src/zlog.zig"),
         .target = target,
         .optimize = optimize,

@@ -175,7 +175,7 @@ pub fn generate_span_id() [8]u8 {
 pub fn expand_short_to_trace_id(short_id: u64) [16]u8 {
     assert(short_id > 0);
 
-    var trace_id_expanded: [16]u8 = [_]u8{0} ** 16;
+    var trace_id_expanded: [16]u8 = @splat(0);
 
     trace_id_expanded[8] = @intCast((short_id >> 56) & 0xFF);
     trace_id_expanded[9] = @intCast((short_id >> 48) & 0xFF);
@@ -344,7 +344,7 @@ test "should_sample_from_trace_id with different rates" {
 }
 
 test "is_all_zero_id detects zero arrays" {
-    const zero_array = [_]u8{0} ** 16;
+    const zero_array: [16]u8 = @splat(0);
     const non_zero_array = [_]u8{ 0, 0, 0, 1, 0, 0, 0, 0 };
 
     try testing.expect(is_all_zero_id(zero_array[0..]));

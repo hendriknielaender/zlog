@@ -27,7 +27,7 @@ pub const LogEvent = struct {
         log_fields: []const field.Field,
         trace_ctx: trace_mod.TraceContext,
     ) LogEvent {
-        assert(@intFromEnum(log_level) <= @intFromEnum(config.Level.fatal));
+        assert(@backingInt(log_level) <= @backingInt(config.Level.fatal));
         assert(log_message.len > 0);
         assert(log_message.len < 64 * 1024);
         assert(log_fields.len <= 64);
